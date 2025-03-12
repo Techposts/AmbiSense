@@ -1,5 +1,3 @@
-I'd be happy to create a detailed project description for your GitHub repository. This project appears to be a sophisticated ambient lighting system that uses radar sensing to control LED strips.
-
 # AmbiSense: Radar-Controlled LED System
 
 ## Project Description
@@ -43,4 +41,4 @@ The core of AmbiSense is built around an ESP32 microcontroller that interfaces w
 - Settings persistence through ESP32's EEPROM
 - Real-time distance visualization in the web dashboard
 
-This project was created by Ravi Singh for techPosts Media.
+This project was created by Ravi Singh for TechPosts Media.
