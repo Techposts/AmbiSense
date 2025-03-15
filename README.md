@@ -108,15 +108,38 @@ The ESP Flash Download Tool provides a user-friendly GUI for flashing ESP device
 ![ESP Flash Download Tool Configuration](https://i.imgur.com/AYZa8eK.png)
 *(Example of ESP Flash Download Tool configuration - your file paths will be different)*
 
-#### Using esptool.py (For advanced users)
+#### Using esptool.exe (Alternative method)
 
-If you prefer command-line tools, you can use esptool.py:
+esptool is a command-line utility for flashing ESP devices. Here's how to use it:
 
-```
-esptool.py --chip esp32c3 --port [PORT] --baud 921600 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size detect 0x0 AmbiSense-ESP32C3-bootloader.bin 0x8000 AmbiSense-ESP32C3-partitions.bin 0x10000 AmbiSense-ESP32C3.bin
-```
+1. **Install esptool** using pip (requires Python):
+   ```
+   pip install esptool
+   ```
 
-Replace `[PORT]` with your actual COM port (e.g., COM3 on Windows or /dev/ttyUSB0 on Linux).
+2. **Open Command Prompt** (cmd) and navigate to your binary files:
+   ```
+   cd C:\path\to\your\binaries
+   ```
+
+3. **Flash your ESP32-C3** with this command (replace COM3 with your actual port):
+   ```
+   esptool.exe --chip esp32c3 --port COM3 --baud 921600 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size 4MB 0x0 AmbiSense-ESP32C3-bootloader.bin 0x8000 AmbiSense-ESP32C3-partitions.bin 0x10000 AmbiSense-ESP32C3.bin
+   ```
+
+4. **Troubleshooting**:
+   - If you have connection issues, try erasing the flash first:
+     ```
+     esptool.exe --chip esp32c3 --port COM3 erase_flash
+     ```
+   - If you still have issues, try a lower baud rate:
+     ```
+     esptool.exe --chip esp32c3 --port COM3 --baud 115200 write_flash -z --flash_mode dio --flash_freq 80m --flash_size 4MB 0x0 AmbiSense-ESP32C3-bootloader.bin 0x8000 AmbiSense-ESP32C3-partitions.bin 0x10000 AmbiSense-ESP32C3.bin
+     ```
+   - For detailed logs, add the `-v` flag:
+     ```
+     esptool.exe -v --chip esp32c3 --port COM3 --baud 921600 write_flash -z --flash_mode dio --flash_freq 80m --flash_size 4MB 0x0 AmbiSense-ESP32C3-bootloader.bin 0x8000 AmbiSense-ESP32C3-partitions.bin 0x10000 AmbiSense-ESP32C3.bin
+     ```
 
 ## After Flashing
 
