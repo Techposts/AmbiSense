@@ -89,7 +89,7 @@ The ESP Flash Download Tool provides a user-friendly GUI for flashing ESP device
    - Set SPI MODE to "DIO"
    - Set FLASH SIZE to "4MB" (or match your ESP32-C3's flash size)
 
-4. Add the binary files with these specific addresses:
+4. [Download](https://github.com/Techposts/AmbiSense/releases/tag/V1.0) and add the binary files with these specific addresses:
    - Click [+] and add `AmbiSense-ESP32C3-bootloader.bin` at address 0x0
    - Click [+] and add `AmbiSense-ESP32C3-partitions.bin` at address 0x8000
    - Click [+] and add `AmbiSense-ESP32C3.bin` at address 0x10000
