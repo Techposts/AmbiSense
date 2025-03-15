@@ -146,7 +146,7 @@ esptool is a command-line utility for flashing ESP devices. Here's how to use it
 1. Power on the device
 2. Connect to the WiFi network "AmbiSense" (password: 12345678)
 3. Navigate to http://192.168.4.1 in your browser
-<div align="center">
+<div align="left">
   <img src="https://i.imgur.com/qJ7NrTp.png" alt="AmbiSense - DIY Smart Staircase and Hallway Lighting: Light That Moves With You" width="300"/>
 </div>
 4. Use the web interface to configure your AmbiSense settings
