@@ -50,7 +50,7 @@ The core of AmbiSense is built around an ESP32 microcontroller that interfaces w
 
 - Input: 5V DC via power jack
 - Current: Depends on the number of LEDs (roughly calculate ~60mA per LED at full brightness)
-- For strips longer than 30 LEDs, use a power supply rated for at least 2A
+- For strips movespan longer than 30 LEDs, use a power supply rated for at least 2A or more. I used a 5V 2A for demo, works fine for upto 50 LEDs.
 
 ## Software Setup
 
