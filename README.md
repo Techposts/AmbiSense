@@ -24,6 +24,47 @@ The core of AmbiSense is built around an ESP32 microcontroller that interfaces w
 - 5V power supply (adequate for your LED strip length)
 - Connecting wires
 
+## Circuit Connections
+
+### ESP32-C3 SuperMini to LD2410 Radar
+
+- Connect ESP32 GPIO3 (RX) to LD2410 TX
+- Connect ESP32 GPIO4 (TX) to LD2410 RX
+- Connect ESP32 5V to LD2410 VCC
+- Connect ESP32 GND to LD2410 GND
+
+### ESP32-C3 SuperMini to WS2812B LED Strip
+
+- Connect ESP32 GPIO5 to WS2812B DIN (Data In)
+- Connect ESP32 5V to WS2812B VCC
+- Connect ESP32 GND to WS2812B GND
+
+### Power Supply
+
+- Connect 5V Power Supply positive (+5V) to ESP32 5V pin
+- Connect 5V Power Supply ground (GND) to ESP32 GND pin
+
+> **Note:** For longer LED strips, it's recommended to connect the 5V power supply directly to the WS2812B VCC to avoid overloading the ESP32's voltage regulator. Always ensure adequate current capacity for your LED strip length.
+
+## Power Requirements
+
+- Input: 5V DC via power jack
+- Current: Depends on the number of LEDs (roughly calculate ~60mA per LED at full brightness)
+- For strips longer than 30 LEDs, use a power supply rated for at least 2A
+
+## Software Setup
+
+1. Upload the provided code to your ESP32 using the Arduino IDE
+2. Power on the device
+3. Connect to the WiFi network "AmbiSense" (password: 12345678)
+4. Navigate to http://192.168.4.1 in your browser
+5. Use the web interface to configure:
+   - Number of LEDs
+   - Minimum/maximum detection distance
+   - LED color
+   - Brightness
+   - Moving light span (Number of lEDs that will run along)
+
 ## Use Cases
 
 - **Smart Home Lighting**: Hallways and staircases that illuminate as you approach
