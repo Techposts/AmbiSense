@@ -105,7 +105,7 @@ The ESP Flash Download Tool provides a user-friendly GUI for flashing ESP device
 
 9. Press the reset button on your ESP32-C3 board
 
-![ESP Flash Download Tool Configuration](https://i.imgur.com/AYZa8eK.png)
+![ESP Flash Download Tool Configuration](https://i.imgur.com/IujrnPc.png)
 *(Example of ESP Flash Download Tool configuration - your file paths will be different)*
 
 #### Using esptool.exe (Alternative method)
