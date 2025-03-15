@@ -54,6 +54,8 @@ The core of AmbiSense is built around an ESP32 microcontroller that interfaces w
 
 ## Software Setup
 
+### Option 1: Using Arduino IDE
+
 1. Upload the provided code to your ESP32 using the Arduino IDE
 2. Power on the device
 3. Connect to the WiFi network "AmbiSense" (password: 12345678)
@@ -64,6 +66,64 @@ The core of AmbiSense is built around an ESP32 microcontroller that interfaces w
    - LED color
    - Brightness
    - Moving light span (Number of lEDs that will run along)
+
+### Option 2: Flashing Pre-compiled Binaries
+
+You can flash the pre-compiled binaries directly to your ESP32-C3 using one of the following methods:
+
+#### Using ESP Flash Download Tool (Recommended for beginners)
+
+The ESP Flash Download Tool provides a user-friendly GUI for flashing ESP devices.
+
+1. Download ESP Flash Download Tool:
+   - Download from the official Espressif website: [ESP Flash Download Tool](https://www.espressif.com/en/support/download/other-tools)
+   - Direct link to v4.5: [Flash Download Tools (ESP8266 & ESP32 & ESP32-S2)](https://www.espressif.com/sites/default/files/tools/flash_download_tool_v4.5.zip)
+
+2. Extract and run the tool:
+   - Extract the ZIP file
+   - Run "flash_download_tool_x.x.x.exe" (where x.x.x is the version number)
+   - Select "ESP32-C3 RISC-V" from the chip type dropdown
+
+3. Configure the tool as follows:
+   - Set SPI SPEED to "80MHz"
+   - Set SPI MODE to "DIO"
+   - Set FLASH SIZE to "4MB" (or match your ESP32-C3's flash size)
+
+4. Add the binary files with these specific addresses:
+   - Click [+] and add `AmbiSense-ESP32C3-bootloader.bin` at address 0x0
+   - Click [+] and add `AmbiSense-ESP32C3-partitions.bin` at address 0x8000
+   - Click [+] and add `AmbiSense-ESP32C3.bin` at address 0x10000
+   - Ensure all three checkboxes next to the file paths are checked
+
+5. Select the appropriate COM port where your ESP32-C3 is connected
+
+6. Set the baud rate to 921600 for faster flashing
+
+7. Click the "START" button to begin flashing
+
+8. Wait for the tool to display "FINISH" when the flashing is complete
+
+9. Press the reset button on your ESP32-C3 board
+
+![ESP Flash Download Tool Configuration](https://i.imgur.com/AYZa8eK.png)
+*(Example of ESP Flash Download Tool configuration - your file paths will be different)*
+
+#### Using esptool.py (For advanced users)
+
+If you prefer command-line tools, you can use esptool.py:
+
+```
+esptool.py --chip esp32c3 --port [PORT] --baud 921600 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size detect 0x0 AmbiSense-ESP32C3-bootloader.bin 0x8000 AmbiSense-ESP32C3-partitions.bin 0x10000 AmbiSense-ESP32C3.bin
+```
+
+Replace `[PORT]` with your actual COM port (e.g., COM3 on Windows or /dev/ttyUSB0 on Linux).
+
+## After Flashing
+
+1. Power on the device
+2. Connect to the WiFi network "AmbiSense" (password: 12345678)
+3. Navigate to http://192.168.4.1 in your browser
+4. Use the web interface to configure your AmbiSense settings
 
 ## Use Cases
 
