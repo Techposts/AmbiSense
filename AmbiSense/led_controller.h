@@ -1,6 +1,11 @@
 #ifndef LED_CONTROLLER_H
 #define LED_CONTROLLER_H
 
+#include <Adafruit_NeoPixel.h>
+
+// Make the LED strip available to other modules
+extern Adafruit_NeoPixel strip;
+
 /**
  * Initialize the LED strip
  */
