@@ -76,8 +76,8 @@ You can flash the pre-compiled binaries directly to your ESP32-C3 using one of t
 The ESP Flash Download Tool provides a user-friendly GUI for flashing ESP devices.
 
 1. Download ESP Flash Download Tool:
-   - Download from the official Espressif website: [ESP Flash Download Tool](https://www.espressif.com/en/support/download/other-tools)
-   - Direct link to v4.5: [Flash Download Tools (ESP8266 & ESP32 & ESP32-S2)](https://www.espressif.com/sites/default/files/tools/flash_download_tool_v4.5.zip)
+   - Download from the official Espressif website: [ESP Flash Download Tool](https://dl.espressif.com/public/flash_download_tool.zip)
+   - Flash tool User guide: [Flash Download Tools (ESP8266 & ESP32) Guide](https://docs.espressif.com/projects/esp-test-tools/en/latest/esp32/production_stage/tools/flash_download_tool.html)
 
 2. Extract and run the tool:
    - Extract the ZIP file
