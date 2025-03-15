@@ -14,38 +14,53 @@
  * - wifi_manager: WiFi access point setup
  */
 
- #include <Arduino.h>
- #include "config.h"
- #include "eeprom_manager.h"
- #include "led_controller.h"
- #include "radar_manager.h"
- #include "web_interface.h"
- #include "wifi_manager.h"
- 
- void setup() {
-   Serial.begin(115200);
-   Serial.println("\n\n");
-   Serial.println("***************************************");
-   Serial.println("* AmbiSense                           *");
-   Serial.println("* Radar-Controlled LED System         *");
-   Serial.println("* Created by Ravi Singh               *");
-   Serial.println("* TechPosts Media                     *");
-   Serial.println("* Copyright © 2025. All rights reserved *");
-   Serial.println("***************************************");
-   Serial.println("\n");
-   
-   // Initialize all modules
-   setupEEPROM();     // Must be first to load settings
-   setupLEDs();       // Initialize LED strip
-   setupRadar();      // Initialize radar sensor
-   setupWiFi();       // Setup WiFi access point
-   setupWebServer();  // Start web server
- }
- 
- void loop() {
-   // Handle web server requests
-   handleWebServer();
-   
-   // Process radar readings and update LEDs
-   processRadarReading();
- }
+#include <Arduino.h>
+#include "config.h"
+#include "eeprom_manager.h"
+#include "led_controller.h"
+#include "radar_manager.h"
+#include "web_interface.h"
+#include "wifi_manager.h"
+
+void setup() {
+  // Initialize serial first for debugging
+  Serial.begin(115200);
+  Serial.println("\n\n");
+  Serial.println("***************************************");
+  Serial.println("* AmbiSense                           *");
+  Serial.println("* Radar-Controlled LED System         *");
+  Serial.println("* Created by Ravi Singh               *");
+  Serial.println("* TechPosts Media                     *");
+  Serial.println("* Copyright © 2025. All rights reserved *");
+  Serial.println("***************************************");
+  Serial.println("\n");
+  
+  // Critical initialization sequence:
+  // 1. EEPROM first to load settings
+  setupEEPROM();     
+  
+  // 2. LED strip after settings are loaded
+  setupLEDs();       
+  
+  // 3. Update LED configuration with the loaded settings
+  updateLEDConfig();
+  
+  // 4. Initialize radar sensor
+  setupRadar();      
+  
+  // 5. Setup WiFi access point
+  setupWiFi();       
+  
+  // 6. Start web server
+  setupWebServer();  
+  
+  Serial.println("Initialization complete. System ready.");
+}
+
+void loop() {
+  // Handle web server requests
+  handleWebServer();
+  
+  // Process radar readings and update LEDs
+  processRadarReading();
+}
