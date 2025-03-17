@@ -6,6 +6,15 @@ AmbiSense is an innovative smart lighting solution that uses radar sensing techn
 
 The core of AmbiSense is built around an ESP32 microcontroller that interfaces with an LD2410 radar module and NeoPixel LED strips. The system creates a moving light pattern that responds to a person's proximity, with the illuminated section of the LED strip changing based on detected distance.
 
+# AmbiSense: Radar-Controlled LED System
+
+<div align="center">
+  <a href="https://www.youtube.com/watch?v=_xYEh8xkq1c">
+    <img src="https://img.youtube.com/vi/_xYEh8xkq1c/0.jpg" alt="AmbiSense - Radar-Controlled LED System" width="600">
+  </a>
+  <p><em>Click the image above to watch the video demonstration</em></p>
+</div>
+
 ## Key Features
 
 - **Radar-Based Motion Detection**: Uses the LD2410 24GHz radar module for accurate presence and distance sensing without privacy concerns of cameras
