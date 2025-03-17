@@ -1,0 +1,176 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 800 500">
+  <!-- Background -->
+  <rect width="800" height="500" fill="#f8f9fa" />
+
+  <!-- Definitions for animations -->
+  <defs>
+    <!-- Data flow animation -->
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#0066CC" />
+    </marker>
+    
+    <!-- LED Animation -->
+    <radialGradient id="ledGlow" cx="0.5" cy="0.5" r="0.5" fx="0.5" fy="0.5">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="1">
+        <animate attributeName="stop-opacity" values="1;0.8;1" dur="2s" repeatCount="indefinite" />
+      </stop>
+      <stop offset="100%" stop-color="#00ff00" stop-opacity="0.5">
+        <animate attributeName="stop-opacity" values="0.5;0.1;0.5" dur="2s" repeatCount="indefinite" />
+      </stop>
+    </radialGradient>
+  </defs>
+  
+  <!-- ESP32C3 SuperMini -->
+  <rect x="550" y="100" width="180" height="280" rx="10" ry="10" fill="#E6E6E6" stroke="#333" stroke-width="2" />
+  <text x="640" y="130" font-family="Arial" font-size="16" text-anchor="middle" font-weight="bold">ESP32C3 SuperMini</text>
+  
+  <!-- ESP32C3 Pins -->
+  <circle cx="580" cy="170" r="6" fill="#333" /> <!-- PIN 3 (RX) -->
+  <text x="580" y="155" font-family="Arial" font-size="12" text-anchor="middle">PIN 3</text>
+  
+  <circle cx="580" cy="210" r="6" fill="#333" /> <!-- PIN 4 (TX) -->
+  <text x="580" y="195" font-family="Arial" font-size="12" text-anchor="middle">PIN 4</text>
+  
+  <circle cx="580" cy="250" r="6" fill="red" /> <!-- 5V -->
+  <text x="580" y="235" font-family="Arial" font-size="12" text-anchor="middle">5V</text>
+  
+  <circle cx="580" cy="290" r="6" fill="#000" /> <!-- GND -->
+  <text x="580" y="275" font-family="Arial" font-size="12" text-anchor="middle">GND</text>
+  
+  <circle cx="580" cy="330" r="6" fill="#33CC33" /> <!-- PIN 5 (LED Data) -->
+  <text x="565" y="315" font-family="Arial" font-size="12" text-anchor="middle">PIN 5</text>
+  
+  <!-- LD2410C Sensor -->
+  <rect x="100" y="100" width="180" height="200" rx="10" ry="10" fill="#D1E7DD" stroke="#333" stroke-width="2" />
+  <text x="190" y="130" font-family="Arial" font-size="16" text-anchor="middle" font-weight="bold">LD2410C Sensor</text>
+  
+  <!-- LD2410C Pins -->
+  <circle cx="250" cy="170" r="6" fill="#333" /> <!-- RX_PIN -->
+  <text x="250" y="155" font-family="Arial" font-size="12" text-anchor="middle">RX_PIN</text>
+  
+  <circle cx="250" cy="210" r="6" fill="#333" /> <!-- TX_PIN -->
+  <text x="250" y="195" font-family="Arial" font-size="12" text-anchor="middle">TX_PIN</text>
+  
+  <circle cx="250" cy="250" r="6" fill="red" /> <!-- 5V -->
+  <text x="250" y="235" font-family="Arial" font-size="12" text-anchor="middle">5V</text>
+  
+  <circle cx="250" cy="290" r="6" fill="#000" /> <!-- GND -->
+  <text x="250" y="275" font-family="Arial" font-size="12" text-anchor="middle">GND</text>
+  
+  <!-- WS2812 LED -->
+  <rect x="100" y="370" width="180" height="100" rx="10" ry="10" fill="#FFE8D6" stroke="#333" stroke-width="2" />
+  <text x="190" y="400" font-family="Arial" font-size="16" text-anchor="middle" font-weight="bold">WS2812 LED</text>
+  
+  <!-- LED visualization -->
+  <circle cx="160" cy="420" r="15" fill="url(#ledGlow)" />
+  <circle cx="160" cy="420" r="12" fill="#00FF00">
+    <animate attributeName="fill" values="#00FF00;#00AA00;#00FF00" dur="2s" repeatCount="indefinite" />
+  </circle>
+  
+  <!-- WS2812 Pins - REARRANGED -->
+  <circle cx="250" cy="400" r="6" fill="red" /> <!-- 5V -->
+  <text x="250" y="385" font-family="Arial" font-size="12" text-anchor="middle">5V</text>
+  
+  <circle cx="250" cy="430" r="6" fill="#33CC33" /> <!-- Data -->
+  <text x="250" y="415" font-family="Arial" font-size="12" text-anchor="middle">DATA</text>
+  
+  <circle cx="250" cy="460" r="6" fill="#000" /> <!-- GND -->
+  <text x="250" y="445" font-family="Arial" font-size="12" text-anchor="middle">GND</text>
+  
+  <!-- Connection Lines with Animations -->
+  <!-- TX_PIN to PIN 4 -->
+  <path d="M 250 210 L 580 210" fill="none" stroke="#0066CC" stroke-width="3" stroke-dasharray="4,4">
+    <animate attributeName="stroke-dashoffset" from="8" to="0" dur="1s" repeatCount="indefinite" />
+  </path>
+  
+  <!-- RX_PIN to PIN 3 -->
+  <path d="M 250 170 L 580 170" fill="none" stroke="#0066CC" stroke-width="3" stroke-dasharray="4,4">
+    <animate attributeName="stroke-dashoffset" from="0" to="8" dur="1s" repeatCount="indefinite" />
+  </path>
+  
+  <!-- WS2812 Data to PIN 5 -->
+  <path d="M 250 430 C 400 430, 400 330, 580 330" fill="none" stroke="#33CC33" stroke-width="3" stroke-dasharray="4,4">
+    <animate attributeName="stroke-dashoffset" from="0" to="8" dur="1s" repeatCount="indefinite" />
+  </path>
+  
+  <!-- 5V Connections -->
+  <!-- LD2410C to ESP32 -->
+  <path d="M 250 250 L 400 250 L 400 250 L 580 250" fill="none" stroke="red" stroke-width="3">
+    <animate attributeName="stroke-opacity" values="0.7;1;0.7" dur="2s" repeatCount="indefinite" />
+  </path>
+  
+  <!-- WS2812 to ESP32 -->
+  <path d="M 250 400 L 480 400 L 480 250 L 580 250" fill="none" stroke="red" stroke-width="3">
+    <animate attributeName="stroke-opacity" values="0.7;1;0.7" dur="2s" repeatCount="indefinite" />
+  </path>
+  
+  <!-- GND Connections -->
+  <!-- LD2410C to ESP32 -->
+  <path d="M 250 290 L 420 290 L 420 290 L 580 290" fill="none" stroke="#000" stroke-width="3" />
+  
+  <!-- WS2812 to ESP32 -->
+  <path d="M 250 460 L 460 460 L 460 290 L 580 290" fill="none" stroke="#000" stroke-width="3" />
+  
+  <!-- Data Packets Animation -->
+  <!-- TX → PIN 4 Packets -->
+  <circle id="tx-packet-1" cx="250" cy="210" r="4" fill="#0066CC">
+    <animate attributeName="cx" from="250" to="580" dur="3s" repeatCount="indefinite" />
+  </circle>
+  <circle id="tx-packet-2" cx="250" cy="210" r="4" fill="#0066CC">
+    <animate attributeName="cx" from="250" to="580" dur="3s" begin="1s" repeatCount="indefinite" />
+  </circle>
+  <circle id="tx-packet-3" cx="250" cy="210" r="4" fill="#0066CC">
+    <animate attributeName="cx" from="250" to="580" dur="3s" begin="2s" repeatCount="indefinite" />
+  </circle>
+  
+  <!-- RX → PIN 3 Packets -->
+  <circle id="rx-packet-1" cx="580" cy="170" r="4" fill="#0066CC">
+    <animate attributeName="cx" from="580" to="250" dur="3s" repeatCount="indefinite" />
+  </circle>
+  <circle id="rx-packet-2" cx="580" cy="170" r="4" fill="#0066CC">
+    <animate attributeName="cx" from="580" to="250" dur="3s" begin="1s" repeatCount="indefinite" />
+  </circle>
+  <circle id="rx-packet-3" cx="580" cy="170" r="4" fill="#0066CC">
+    <animate attributeName="cx" from="580" to="250" dur="3s" begin="2s" repeatCount="indefinite" />
+  </circle>
+  
+  <!-- LED Data Packets -->
+  <circle id="led-packet-1" cx="580" cy="330" r="4" fill="#33CC33">
+    <animate attributeName="cx" values="580;500;420;340;250" dur="2s" repeatCount="indefinite" />
+    <animate attributeName="cy" values="330;330;350;390;430" dur="2s" repeatCount="indefinite" />
+  </circle>
+  <circle id="led-packet-2" cx="580" cy="330" r="4" fill="#33CC33">
+    <animate attributeName="cx" values="580;500;420;340;250" dur="2s" begin="0.7s" repeatCount="indefinite" />
+    <animate attributeName="cy" values="330;330;350;390;430" dur="2s" begin="0.7s" repeatCount="indefinite" />
+  </circle>
+  <circle id="led-packet-3" cx="580" cy="330" r="4" fill="#33CC33">
+    <animate attributeName="cx" values="580;500;420;340;250" dur="2s" begin="1.4s" repeatCount="indefinite" />
+    <animate attributeName="cy" values="330;330;350;390;430" dur="2s" begin="1.4s" repeatCount="indefinite" />
+  </circle>
+  
+  <!-- Power Pulses -->
+  <!-- To LD2410C -->
+  <rect id="power-pulse-1" x="400" y="248" width="8" height="4" fill="red">
+    <animate attributeName="x" from="580" to="250" dur="2s" repeatCount="indefinite" />
+  </rect>
+  <rect id="power-pulse-2" x="400" y="248" width="8" height="4" fill="red">
+    <animate attributeName="x" from="580" to="250" dur="2s" begin="0.7s" repeatCount="indefinite" />
+  </rect>
+  
+  <!-- To WS2812 -->
+  <rect id="power-pulse-3" x="480" y="398" width="8" height="4" fill="red">
+    <animate attributeName="x" from="580" to="250" dur="2.5s" repeatCount="indefinite" />
+    <animate attributeName="y" values="250;250;400;400" dur="2.5s" repeatCount="indefinite" />
+  </rect>
+  <rect id="power-pulse-4" x="480" y="398" width="8" height="4" fill="red">
+    <animate attributeName="x" from="580" to="250" dur="2.5s" begin="1.25s" repeatCount="indefinite" />
+    <animate attributeName="y" values="250;250;400;400" dur="2.5s" begin="1.25s" repeatCount="indefinite" />
+  </rect>
+  
+  <!-- Connection Labels -->
+  <text x="415" y="155" font-family="Arial" font-size="14" text-anchor="middle">RX_PIN → PIN 3</text>
+  <text x="415" y="225" font-family="Arial" font-size="14" text-anchor="middle">TX_PIN → PIN 4</text>
+  <text x="415" y="350" font-family="Arial" font-size="14" text-anchor="middle" fill="#33CC33">DATA → PIN 5</text>
+  <text x="320" y="275" font-family="Arial" font-size="14" text-anchor="middle" fill="red">5V</text>
+  <text x="320" y="315" font-family="Arial" font-size="14" text-anchor="middle">GND</text>
+</svg>
