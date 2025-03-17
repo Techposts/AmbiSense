@@ -1,4 +1,4 @@
-# AmbiSense: Radar-Controlled LED System
+# AmbiSense - Radar-Controlled LED System
 
 ## Project Description
 
@@ -44,7 +44,7 @@ The core of AmbiSense is built around an ESP32 microcontroller that interfaces w
 - Connect 5V Power Supply positive (+5V) to ESP32 5V pin
 - Connect 5V Power Supply ground (GND) to ESP32 GND pin
 
-<img src="https://raw.githubusercontent.com/Techposts/AmbiSense/caf48a73135606ad12a80041634f39ffdb8ceb2d/Assets/circuit-diagram.svg?token=AGY76LRIC5RJVMZ6MEDUWSLH27Z2W" width="800" alt="LD2410C to ESP32C3 SuperMini Circuit Diagram">
+<img src="https://github.com/Techposts/AmbiSense/blob/main/Assets/circuit-diagram.svg" width="800" alt="LD2410C to ESP32C3 SuperMini Circuit Diagram">
 
 > **Note:** For longer LED strips, it's recommended to connect the 5V power supply directly to the WS2812B VCC to avoid overloading the ESP32's voltage regulator. Always ensure adequate current capacity for your LED strip length.
 
@@ -62,7 +62,10 @@ The core of AmbiSense is built around an ESP32 microcontroller that interfaces w
 2. Power on the device
 3. Connect to the WiFi network "AmbiSense" (password: 12345678)
 4. Navigate to http://192.168.4.1 in your browser
-5. Use the web interface to configure:
+<div align="left">
+  <img src="https://i.imgur.com/qJ7NrTp.png" alt="AmbiSense - DIY Smart Staircase and Hallway Lighting: Light That Moves With You" width="300"/>
+</div>
+6. Use the web interface to configure:
    - Number of LEDs
    - Minimum/maximum detection distance
    - LED color
