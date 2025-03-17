@@ -1,5 +1,5 @@
 # AmbiSense - Radar-Controlled LED System
-
+<center><img src="https://raw.githubusercontent.com/Techposts/AmbiSense/refs/heads/main/Assets/AmbiSense.webp" width="800" alt="AmbiSense Logo"></center>center>
 ## Project Description
 
 AmbiSense is an innovative smart lighting solution that uses radar sensing technology to create responsive ambient lighting experiences. The system detects movement and distance using an LD2410 radar sensor and dynamically controls NeoPixel LED strips in real-time, creating an interactive lighting environment.
