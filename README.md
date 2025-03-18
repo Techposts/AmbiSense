@@ -7,6 +7,8 @@ AmbiSense is an innovative smart lighting solution that uses radar sensing techn
 
 The core of AmbiSense is built around an ESP32 microcontroller that interfaces with an LD2410 radar module and NeoPixel LED strips. The system creates a moving light pattern that responds to a person's proximity, with the illuminated section of the LED strip changing based on detected distance.
 
+We also developed a [Custom Home Assistant Integration](https://github.com/Techposts/ambisense-homeassistant) allowing you to integrate and control the AmbiSense from the Home Assistant and also run powerful automations. 
+
 # AmbiSense: Radar-Controlled LED System
 
 <div align="center">
