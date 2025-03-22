@@ -15,22 +15,35 @@ We also developed a [Custom Home Assistant Integration](https://github.com/Techp
   <a href="https://www.youtube.com/watch?v=_xYEh8xkq1c">
     <img src="https://img.youtube.com/vi/_xYEh8xkq1c/0.jpg" alt="AmbiSense - Radar-Controlled LED System" width="600">
   </a>
-  <p><em>Click the image above to watch the video demonstration</em></p>
+  <p><em>Click the image above to watch the video Guide</em></p>
+</div>
+
+<div align="center">
+  <a href="https://www.youtube.com/watch?v=AcjSumdNSIs">
+    <img src="https://img.youtube.com/vi/AcjSumdNSIs/0.jpg" alt="AmbiSense - Radar-Controlled LED System" width="600">
+  </a>
+  <p><em>Click the image above to watch the demo video</em></p>
 </div>
 
 ## Key Features
 
 - **Radar-Based Motion Detection**: Uses the LD2410 24GHz radar module for accurate presence and distance sensing without privacy concerns of cameras
 - **Dynamic LED Control**: Creates moving light patterns that respond to user proximity
-- **Customizable Settings**: Configure colors, brightness, sensitivity, and behavior through an intuitive web interface
-- **Wi-Fi Configuration**: Connect to the device's access point to adjust all parameters without reprogramming
-- **Distance-Based Interaction**: Light patterns change based on detected distance between minimum and maximum thresholds
-- **Persistent Settings**: All configurations are saved to EEPROM and retained after power cycles
-- **Real-Time Feedback**: Web interface displays current detected distance and provides visual feedback
+- **Multiple Lighting Modes**: Choose from Standard, Rainbow, Color Wave, Breathing, and Solid Color effects
+- **Directional Light Trails**: Adds trailing effects that follow movement direction with customizable trail length
+- **Background Lighting**: Optional ambient background illumination when no motion is detected
+- **Center Shift Adjustment**: Reposition the active LED zone relative to detected position
+- **Web Interface**: Configure all settings through an intuitive tab-based web interface with modern, responsive design
+- **Real-Time Distance Visualization**: Web interface displays current detected distance and provides visual feedback
+- **WiFi Network Management**: 
+  - Connect to existing networks or create access point
+  - Scan for available networks from the web interface
+  - mDNS support for easy device discovery (access via http://ambisense-[name].local)
+- **Persistent Settings**: All configurations are saved to EEPROM with CRC validation and retained after power cycles
 
 ## Hardware Requirements
 
-- ESP32 development board
+- ESP32 development board (recommended: ESP32-C3)
 - LD2410 radar sensor module
 - WS2812B (NeoPixel) compatible LED strip
 - 5V power supply (adequate for your LED strip length)
@@ -82,7 +95,12 @@ We also developed a [Custom Home Assistant Integration](https://github.com/Techp
    - Minimum/maximum detection distance
    - LED color
    - Brightness
-   - Moving light span (Number of lEDs that will run along)
+   - Moving light span (Number of LEDs that will run along)
+   - Light mode (Standard, Rainbow, Color Wave, Breathing, Solid)
+   - Directional light trails
+   - Background lighting mode
+   - Center shift adjustment
+   - WiFi network settings
 
 ### Option 2: Flashing Pre-compiled Binaries
 
@@ -106,7 +124,7 @@ The ESP Flash Download Tool provides a user-friendly GUI for flashing ESP device
    - Set SPI MODE to "DIO"
    - Set FLASH SIZE to "4MB" (or match your ESP32-C3's flash size)
 
-4. [Download](https://github.com/Techposts/AmbiSense/releases/tag/V1.0) and add the binary files with these specific addresses:
+4. [Download](https://github.com/Techposts/AmbiSense/releases/latest) and add the binary files with these specific addresses:
    - Click [+] and add `AmbiSense-ESP32C3-bootloader.bin` at address 0x0
    - Click [+] and add `AmbiSense-ESP32C3-partitions.bin` at address 0x8000
    - Click [+] and add `AmbiSense-ESP32C3.bin` at address 0x10000
@@ -167,6 +185,34 @@ esptool is a command-line utility for flashing ESP devices. Here's how to use it
   <img src="https://i.imgur.com/qJ7NrTp.png" alt="AmbiSense - DIY Smart Staircase and Hallway Lighting: Light That Moves With You" width="300"/>
 </div>
 4. Use the web interface to configure your AmbiSense settings
+5. Optionally connect to your home WiFi network via the Network tab
+6. If connected to your home WiFi, access via http://ambisense-[name].local
+
+## Web Interface Features
+
+### Basic Tab
+- Number of LEDs configuration
+- Distance range settings
+- RGB color selection with intuitive color picker
+- Brightness control
+
+### Advanced Tab
+- Light mode selection (Standard, Rainbow, Color Wave, Breathing, Solid)
+- Background lighting mode toggle
+- Directional light trails toggle
+- Center shift adjustment
+- Trail length customization
+
+### Effects Tab
+- Moving light span adjustment
+- Effect speed control
+- Effect intensity settings
+
+### Network Tab
+- WiFi network scanning and selection
+- Device name configuration for mDNS
+- Network status monitoring
+- WiFi reset option
 
 ## Use Cases
 
@@ -175,6 +221,8 @@ esptool is a command-line utility for flashing ESP devices. Here's how to use it
 - **Interactive Installations**: Art exhibits or displays that respond to viewers' proximity
 - **Energy-Efficient Lighting**: Lights that activate only when needed based on presence detection
 - **Accessibility Applications**: Assistive lighting for navigation in dark spaces
+- **Home Theater Ambiance**: Responsive bias lighting that changes with viewer movement
+- **Creative RGB Effects**: Display colorful animations and patterns for decorative purposes
 
 ## Technical Details
 
@@ -182,7 +230,10 @@ esptool is a command-line utility for flashing ESP devices. Here's how to use it
 - Communicates with LD2410 radar sensor via UART
 - Controls WS2812B LED strips using the Adafruit NeoPixel library
 - Creates a Wi-Fi access point with a modern web interface for configuration
-- Settings persistence through ESP32's EEPROM
+- Settings persistence through ESP32's EEPROM with CRC validation
 - Real-time distance visualization in the web dashboard
+- Multiple animation modes with customizable parameters
+- WiFi management with mDNS support for easy access
 
 This project was created by Ravi Singh for TechPosts Media.
+Copyright © 2025 TechPosts Media. All rights reserved.
