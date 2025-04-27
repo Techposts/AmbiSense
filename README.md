@@ -13,6 +13,12 @@ We also developed a [Custom Home Assistant Integration](https://github.com/Techp
 </div>
 
 # AmbiSense: Radar-Controlled LED System
+<div align="center">
+  <a href="https://www.youtube.com/watch?v=1fmlwl2iujk">
+    <img src="https://img.youtube.com/vi/1fmlwl2iujk/0.jpg" alt="AmbiSense v4.1 Release - Intelligent DIY Motion-Tracking Lights That Illuminate Path Dynamically" width="600">
+  </a>
+  <p><em>Click the image above to watch the AmbiSense v4.1 Release video</em></p>
+</div>
 
 <div align="center">
   <a href="https://www.youtube.com/watch?v=_xYEh8xkq1c">
@@ -28,12 +34,7 @@ We also developed a [Custom Home Assistant Integration](https://github.com/Techp
   <p><em>Click the image above to watch the demo video</em></p>
 </div>
 
-<div align="center">
-  <a href="https://www.youtube.com/watch?v=1fmlwl2iujk">
-    <img src="https://img.youtube.com/vi/1fmlwl2iujk/0.jpg" alt="AmbiSense v4.1 Release - Intelligent DIY Motion-Tracking Lights That Illuminate Path Dynamically" width="600">
-  </a>
-  <p><em>Click the image above to watch the AmbiSense v4.1 Release video</em></p>
-</div>
+
 
 ## Key Features
 
