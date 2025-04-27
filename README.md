@@ -28,6 +28,13 @@ We also developed a [Custom Home Assistant Integration](https://github.com/Techp
   <p><em>Click the image above to watch the demo video</em></p>
 </div>
 
+<div align="center">
+  <a href="https://www.youtube.com/watch?v=1fmlwl2iujk">
+    <img src="https://img.youtube.com/vi/1fmlwl2iujk/0.jpg" alt="AmbiSense v4.1 Release - Intelligent DIY Motion-Tracking Lights That Illuminate Path Dynamically" width="600">
+  </a>
+  <p><em>Click the image above to watch the AmbiSense v4.1 Release video</em></p>
+</div>
+
 ## Key Features
 
 - **Radar-Based Motion Detection**: Uses the LD2410 24GHz radar module for accurate presence and distance sensing without privacy concerns of cameras
@@ -86,24 +93,56 @@ We also developed a [Custom Home Assistant Integration](https://github.com/Techp
 
 ### Option 1: Using Arduino IDE
 
-1. Upload the provided code to your ESP32 using the Arduino IDE
-2. Power on the device
-3. Connect to the WiFi network "AmbiSense" (password: 12345678)
-4. Navigate to http://192.168.4.1 in your browser
+1. Download the code from the [GitHub repository](https://github.com/Techposts/AmbiSense)
+   ```
+   git clone https://github.com/Techposts/AmbiSense.git
+   ```
+   Or download the ZIP file from the repository and extract it
+
+2. Open the Arduino IDE
+
+3. Install required libraries:
+   - Go to Sketch > Include Library > Manage Libraries
+   - Search for and install the following libraries:
+     - Adafruit NeoPixel
+     - ArduinoJson
+     - ESPAsyncWebServer
+     - AsyncTCP
+     - LD2410
+
+4. Open the AmbiSense.ino file in Arduino IDE
+
+5. Select the correct board:
+   - Go to Tools > Board > ESP32 > ESP32C3 Dev Module
+   - Set Flash Size to "4MB"
+   - Set Partition Scheme to "Default 4MB with spiffs"
+   - Set Upload Speed to "921600"
+
+6. Select the correct port:
+   - Go to Tools > Port and select the COM port where your ESP32 is connected
+
+7. Click the Upload button to compile and flash the code to your ESP32
+
+8. Once the upload is complete, the ESP32 will restart automatically
+
+9. Connect to the WiFi network "AmbiSense" (password: 12345678)
+
+10. Navigate to http://192.168.4.1 in your browser
 <div align="left">
   <img src="https://i.imgur.com/qJ7NrTp.png" alt="AmbiSense - DIY Smart Staircase and Hallway Lighting: Light That Moves With You" width="300"/>
 </div>
-6. Use the web interface to configure:
-   - Number of LEDs
-   - Minimum/maximum detection distance
-   - LED color
-   - Brightness
-   - Moving light span (Number of LEDs that will run along)
-   - Light mode (Standard, Rainbow, Color Wave, Breathing, Solid)
-   - Directional light trails
-   - Background lighting mode
-   - Center shift adjustment
-   - WiFi network settings
+
+11. Use the web interface to configure:
+    - Number of LEDs
+    - Minimum/maximum detection distance
+    - LED color
+    - Brightness
+    - Moving light span (Number of LEDs that will run along)
+    - Light mode (Standard, Rainbow, Color Wave, Breathing, Solid)
+    - Directional light trails
+    - Background lighting mode
+    - Center shift adjustment
+    - WiFi network settings
 
 ### Option 2: Flashing Pre-compiled Binaries
 
@@ -216,6 +255,25 @@ esptool is a command-line utility for flashing ESP devices. Here's how to use it
 - Device name configuration for mDNS
 - Network status monitoring
 - WiFi reset option
+
+## Physical Controls
+
+AmbiSense comes with a physical button for easy control:
+
+- **Short Press** (less than 2 seconds): Toggles the system ON/OFF
+- **Long Press** (10 seconds or more): Resets Wi-Fi settings and restarts the device in AP mode
+
+This physical button is connected to GPIO pin 7 (defined as `WIFI_RESET_BUTTON_PIN` in the code). It provides a convenient way to control the system without needing to access the web interface, particularly useful for turning the lights on/off or resetting network settings if you're unable to connect to the device.
+
+## 3D Printed Case
+
+The repository includes STL files for 3D printing a custom case for your AmbiSense device. The case is designed to house the ESP32, LD2410 radar module, and associated components.
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/Techposts/AmbiSense/refs/heads/main/AmbiSense.jpg" width="600" alt="AmbiSense 3D Case">
+</div>
+
+You can find the STL files in the [STL Files folder](https://github.com/Techposts/AmbiSense/tree/main/STL%20Files) of this repository.
 
 ## Use Cases
 
