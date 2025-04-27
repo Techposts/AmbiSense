@@ -1,5 +1,5 @@
 /**
- * AmbiSense v4.0.4 - Enhanced Radar-Controlled LED System
+ * AmbiSense v4.1.1 - Enhanced Radar-Controlled LED System
  * Created by Ravi Singh (TechPosts media)
  * Copyright © 2025 TechPosts Media. All rights reserved.
  * It has a custom Home Assistant integration that works for HA.
@@ -46,7 +46,7 @@ void setup() {
   Serial.begin(115200);
   Serial.println("\n\n");
   Serial.println("***************************************");
-  Serial.println("* AmbiSense v4.1                     *");
+  Serial.println("* AmbiSense v4.1.1                    *");
   Serial.println("* Radar-Controlled LED System         *");
   Serial.println("* With WiFi & mDNS Support            *");
   Serial.println("* Created by Ravi Singh               *");
