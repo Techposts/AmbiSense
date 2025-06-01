@@ -274,7 +274,7 @@ esptool.exe --chip esp32c3 --port COM3 --baud 921600 \
   0x0 AmbiSense-ESP32C3-v4.3-bootloader.bin \
   0x8000 AmbiSense-ESP32C3-v4.3-partitions.bin \
   0x10000 AmbiSense-ESP32C3-v4.3.bin
-
+```
 
 # Troubleshooting Multi-Sensor Issues
 
