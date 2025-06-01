@@ -66,7 +66,7 @@ We also developed a [Custom Home Assistant Integration](https://github.com/Techp
 </p>
 
 <p align="left">
-  <img src="https://raw.githubusercontent.com/Techposts/AmbiSense/refs/heads/main/Assets/AmbISense-mesh-2.jpg.jpg" width="300" alt="AmbiSense Logo">
+  <img src="https://raw.githubusercontent.com/Techposts/AmbiSense/refs/heads/main/Assets/AmbISense-mesh-2.jpg" width="300" alt="AmbiSense Logo">
 </p>
 
 #### 🚀 What's New in v5.1
