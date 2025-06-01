@@ -58,7 +58,7 @@ We also developed a [Custom Home Assistant Integration](https://github.com/Techp
 ## 📚 Version History
 
 ### **Current Version: v5.1** *(Latest)*
-**Released:** January 2025  
+**Released:** June 2025  
 **Status:** Stable Release  
 
 #### 🚀 What's New in v5.1
