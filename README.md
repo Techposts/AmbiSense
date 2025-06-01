@@ -61,11 +61,11 @@ We also developed a [Custom Home Assistant Integration](https://github.com/Techp
 **Released:** June 2025  
 **Status:** Stable Release  
 
-<p align="right">
+<p align="center">
   <img src="https://raw.githubusercontent.com/Techposts/AmbiSense/refs/heads/main/Assets/AmbiSense-Mesh.jpg" width="300" alt="AmbiSense Logo">
 </p>
 
-<p align="left">
+<p align="center">
   <img src="https://raw.githubusercontent.com/Techposts/AmbiSense/refs/heads/main/Assets/AmbISense-mesh-2.jpg" width="300" alt="AmbiSense Logo">
 </p>
 
