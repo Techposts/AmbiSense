@@ -2,12 +2,17 @@
 #define LED_CONTROLLER_H
 
 #include <Adafruit_NeoPixel.h>
+#include "config.h"
+
+// Forward declaration for ESP-NOW LED segment data structure
+struct led_segment_data_t;
+
+// Maximum supported LEDs (can be increased based on available memory)
+#define MAX_SUPPORTED_LEDS 2000
 
 // Make the LED strip available to other modules
 extern Adafruit_NeoPixel strip;
 extern int numLeds;
-
-
 
 /**
  * Initialize the LED strip
@@ -19,6 +24,30 @@ void setupLEDs();
  * Called after settings are loaded or changed
  */
 void updateLEDConfig();
+
+/**
+ * Validate LED count against memory and hardware limits
+ * @param requestedLeds Number of LEDs to validate
+ * @return true if valid, false otherwise
+ */
+bool validateLEDCount(int requestedLeds);
+
+/**
+ * Force LED strip reinitialization with new LED count
+ * @param newLedCount New number of LEDs
+ */
+void reinitializeLEDStrip(int newLedCount);
+
+/**
+ * Get current configured LED count
+ * @return Currently configured LED count
+ */
+int getCurrentLEDCount();
+
+/**
+ * Test all LEDs with color sweep
+ */
+void testAllLEDs();
 
 /**
  * Update LEDs based on distance reading
@@ -85,6 +114,19 @@ void updateDualScanMode(int startLed);
  * @param startLed The starting LED position based on distance
  */
 void updateMotionParticlesMode(int startLed);
+
+/**
+ * Process LED segment data (ESP-NOW distributed mode)
+ * @param segmentData LED segment data structure
+ */
+void processLEDSegmentData(led_segment_data_t segmentData);
+
+/**
+ * Update LED segment for distributed mode
+ * @param globalStartPos Global LED start position  
+ * @param segmentData LED segment data
+ */
+void updateLEDSegment(int globalStartPos, led_segment_data_t segmentData);
 
 /**
  * Helper function to create a color with a specific intensity

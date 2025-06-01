@@ -1,6 +1,7 @@
 #ifndef WIFI_MANAGER_H
 #define WIFI_MANAGER_H
 
+#include <stdexcept>  // For std::exception
 #include <Arduino.h>
 #include <vector>
 #include <WiFi.h>
@@ -57,10 +58,13 @@ public:
   // Get current IP address (AP or STA)
   String getIPAddress();
 
+  // Clean network name of invalid characters
+  String cleanNetworkName(const String& rawName);
+
   // Get current Wi-Fi mode
   WifiManagerMode getMode();
 
-  // Get sanitized mDNS hostname (convert to lowercase, replace spaces with hyphens)
+  // Get sanitized mDNS hostname
   String getSanitizedHostname(const char* deviceName);
 
   // Process WiFi events and maintain connection
@@ -82,7 +86,10 @@ private:
   bool _mDNSStarted = false;
   unsigned long _lastLedUpdateTime = 0;
   int _ledBlinkPhase = 0;
-  bool _ledState = HIGH;  // Start LED OFF (HIGH is OFF with common cathode LED)
+  bool _ledState = HIGH;
+  
+  // Configure static IP if enabled
+  void configureStaticIP();
 };
 
 // Global instance

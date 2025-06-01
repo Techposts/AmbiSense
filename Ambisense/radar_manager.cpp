@@ -2,11 +2,10 @@
 #include "config.h"
 #include "radar_manager.h"
 #include "led_controller.h"
+#include "espnow_manager.h"
 
 // LD2410 radar sensor instance
 ld2410 radar;
-
-
 
 // Detailed motion smoothing state
 struct MotionState {
@@ -27,20 +26,13 @@ void setupRadar() {
     motionState.lastUpdateTime = millis();
     motionState.smoothedDistance = (float)minDistance;
     
-    // Print motion smoothing configuration
-    Serial.println("Radar sensor initialized with motion smoothing:");
-    Serial.print("Motion Smoothing Enabled: ");
-    Serial.println(motionSmoothingEnabled ? "Yes" : "No");
-    Serial.print("Position Smoothing Factor: ");
-    Serial.println(positionSmoothingFactor);
-    Serial.print("Velocity Smoothing Factor: ");
-    Serial.println(velocitySmoothingFactor);
-    Serial.print("Prediction Factor: ");
-    Serial.println(predictionFactor);
-    Serial.print("Position P Gain: ");
-    Serial.println(positionPGain);
-    Serial.print("Position I Gain: ");
-    Serial.println(positionIGain);
+    if (ENABLE_MOTION_LOGGING) {
+        Serial.println("Motion smoothing configuration:");
+        Serial.printf("Motion Smoothing: %s\n", motionSmoothingEnabled ? "Enabled" : "Disabled");
+        Serial.printf("Position Factor: %.2f\n", positionSmoothingFactor);
+        Serial.printf("Velocity Factor: %.2f\n", velocitySmoothingFactor);
+        Serial.printf("Prediction Factor: %.2f\n", predictionFactor);
+    }
 }
 
 bool processRadarReading() {
@@ -56,6 +48,13 @@ bool processRadarReading() {
         if (rawDistance < minDistance) rawDistance = minDistance;
         if (rawDistance > maxDistance) rawDistance = maxDistance;
 
+        // Calculate direction
+        int8_t direction = 0;
+        static int lastRawDistance = rawDistance;
+        if (rawDistance < lastRawDistance - 5) direction = -1; // Moving closer
+        else if (rawDistance > lastRawDistance + 5) direction = 1; // Moving away
+        lastRawDistance = rawDistance;
+
         // Motion smoothing logic
         if (motionSmoothingEnabled) {
             // Time since last update (for velocity calculation)
@@ -65,8 +64,7 @@ bool processRadarReading() {
             
             // If this is the first time after enabling, log it
             static bool firstRun = true;
-            if (firstRun) {
-                Serial.println("[Motion] Motion smoothing active - starting calculations");
+            if (firstRun && ENABLE_MOTION_LOGGING) {
                 Serial.printf("[Motion] Initial raw distance: %d cm\n", rawDistance);
                 firstRun = false;
             }
@@ -127,21 +125,72 @@ bool processRadarReading() {
             // Apply final constraints to ensure it's in valid range
             currentDistance = constrain((int)calculatedDistance, minDistance, maxDistance);
             
-            // Debug output every 500ms to avoid flooding serial
+            // Debug output only occasionally to avoid flooding serial
             static unsigned long lastDebugTime = 0;
-            if (currentTime - lastDebugTime > 500) {  // Only print every 500ms
+            if (ENABLE_MOTION_LOGGING && currentTime - lastDebugTime > 3000) {  // Only print every 3 seconds
                 lastDebugTime = currentTime;
-                Serial.printf("[Motion] Raw: %d, Smoothed: %.1f, Velocity: %.1f, Predicted: %.1f, Final: %d\n", 
-                           rawDistance, motionState.smoothedDistance, motionState.smoothedVelocity, 
-                           motionState.predictedDistance, currentDistance);
+                // Only log if there's significant change
+                static int lastLoggedDistance = 0;
+                if (abs(rawDistance - lastLoggedDistance) > 10) {
+                    Serial.printf("[Motion] Raw: %d, Smoothed: %.1f, Final: %d\n", 
+                               rawDistance, motionState.smoothedDistance, currentDistance);
+                    lastLoggedDistance = rawDistance;
+                }
             }
         } else {
             // Standard mode without smoothing
             currentDistance = rawDistance;
         }
 
-        // Update the LEDs with the current distance
-        updateLEDs(currentDistance);
+        // Handle device role-specific logic
+        if (deviceRole == DEVICE_ROLE_SLAVE) {
+            // SLAVES: Only send data to master, NO LED control in master-slave setup
+            bool validMaster = false;
+            for (int i = 0; i < 6; i++) {
+                if (masterAddress[i] != 0) {
+                    validMaster = true;
+                    break;
+                }
+            }
+            
+            if (validMaster) {
+                sendSensorData(currentDistance, direction);
+                // REMOVED: LED updates for slaves in master-slave mode
+                // Slaves should not control LEDs when connected to a master
+            } else {
+                // Only log occasionally to prevent flooding
+                static unsigned long lastNoMasterLog = 0;
+                if (millis() - lastNoMasterLog > 10000) { // Only log every 10 seconds
+                    Serial.println("INFO: Slave mode active but no master configured yet");
+                    lastNoMasterLog = millis();
+                }
+                
+                // If no master configured, slave can control its own LEDs for testing
+                if (lightMode == LIGHT_MODE_STANDARD) {
+                    updateLEDs(currentDistance);
+                }
+            }
+            return true;
+        }
+        
+        // MASTER DEVICE: Handle LED updates appropriately
+        if (deviceRole == DEVICE_ROLE_MASTER) {
+            if (numSlaveDevices == 0) {
+                // No slaves configured, update LEDs directly for standard mode
+                if (lightMode == LIGHT_MODE_STANDARD) {
+                    updateLEDs(currentDistance);
+                }
+            }
+            // If slaves are configured, updateLEDsWithMultiSensorData() will handle LED updates
+            // This is called automatically from ESP-NOW when data is received
+        }
+        
+        // STANDALONE MODE: If no role is set or unknown role, act as standalone
+        if (deviceRole != DEVICE_ROLE_MASTER && deviceRole != DEVICE_ROLE_SLAVE) {
+            if (lightMode == LIGHT_MODE_STANDARD) {
+                updateLEDs(currentDistance);
+            }
+        }
         
         return true;
     }

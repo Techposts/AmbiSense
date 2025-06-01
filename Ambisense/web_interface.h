@@ -1,93 +1,84 @@
 #ifndef WEB_INTERFACE_H
 #define WEB_INTERFACE_H
 
-#include <AsyncTCP.h>
-#include <ESPAsyncWebServer.h>
+#include <WebServer.h>
 #include <ESPmDNS.h>
 
+// Global WebServer object
+extern WebServer server;
+
 /**
- * Initialize the web server
+ * Initializes the web server
  */
 void setupWebServer();
 
 /**
- * Handle the root page
+ * Generate HTML for different pages
  */
-void handleRoot(AsyncWebServerRequest *request);
+String getMainHTML();
+String getAdvancedHTML();
+String getEffectsHTML();
+String getMeshHTML();
+String getNetworkHTML();
 
 /**
- * Handle setting updates
+ * Route handlers for web pages
  */
-void handleSet(AsyncWebServerRequest *request);
+void handleRoot();
+void handleAdvanced();
+void handleEffects();
+void handleMesh();
+void handleNetwork();
+void handleSimplePage();
 
 /**
- * Handle distance API endpoint
+ * API endpoint handlers
  */
-void handleDistance(AsyncWebServerRequest *request);
+void handleDistance();
+void handleSettings();
+void handleSet();
+void handleSetLightMode();
+void handleSetDirectionalLight();
+void handleSetCenterShift();
+void handleSetTrailLength();
+void handleSetBackgroundMode();
+void handleSetMotionSmoothing();
+void handleSetMotionSmoothingParam();
+void handleSetEffectSpeed();
+void handleSetEffectIntensity();
+void handleSetSensorPriorityMode();  // Handler for sensor priority mode
+void handleResetDistanceValues();  // Handler for resetting distance values
 
 /**
- * Handle settings API endpoint
+ * LED testing and configuration handlers
  */
-void handleSettings(AsyncWebServerRequest *request);
+void handleTestLEDs();
+void handleReinitLEDs();
 
 /**
- * Handle light mode setting
+ * LED Distribution handlers
  */
-void handleSetLightMode(AsyncWebServerRequest *request);
+void handleSetLEDSegmentMode();
+void handleGetLEDSegmentInfo();
+void handleSetLEDSegmentInfo();
 
 /**
- * Handle directional light setting
+ * ESP-NOW handlers
  */
-void handleSetDirectionalLight(AsyncWebServerRequest *request);
+void handleGetDeviceInfo();
+void handleSetDeviceRole();
+void handleScanForSlaves();
+void handleAddSlave();
+void handleRemoveSlave();
+void handleSetMasterMac();
+void handleGetSensorData();
+void handleDiagnostics();
 
 /**
- * Handle center shift setting
+ * WiFi management handlers
  */
-void handleSetCenterShift(AsyncWebServerRequest *request);
-
-/**
- * Handle trail length setting
- */
-void handleSetTrailLength(AsyncWebServerRequest *request);
-
-/**
- * Handle background mode setting
- */
-void handleSetBackgroundMode(AsyncWebServerRequest *request);
-
-/**
- * Handle network settings page
- */
-void handleNetworkSettings(AsyncWebServerRequest *request);
-
-/**
- * Handle network scan API
- */
-void handleScanNetworks(AsyncWebServerRequest *request);
-
-/**
- * Handle WiFi reset
- */
-void handleResetWifi(AsyncWebServerRequest *request);
-
-/**
- * Handle motion smoothing toggle
- */
-void handleSetMotionSmoothing(AsyncWebServerRequest *request);
-
-/**
- * Handle motion smoothing parameter changes
- */
-void handleSetMotionSmoothingParam(AsyncWebServerRequest *request);
-
-/**
- * Handle effect speed setting
- */
-void handleSetEffectSpeed(AsyncWebServerRequest *request);
-
-/**
- * Handle effect intensity setting
- */
-void handleSetEffectIntensity(AsyncWebServerRequest *request);
+void handleNetworkPost();
+void handleResetWifi();
+void handleScanNetworks();
 
 #endif // WEB_INTERFACE_H

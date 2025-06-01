@@ -2,12 +2,16 @@
 #define CONFIG_H
 
 /*
- * AmbiSense v4.0.5 - Enhanced Radar-Controlled LED System
+ * AmbiSense v4.3.0 - Enhanced Radar-Controlled LED System
  * Created by Ravi Singh (techPosts media)
  * Copyright © 2025 TechPosts Media. All rights reserved.
- * 
- * Hardware: ESP32 + LD2410 Radar Sensor + NeoPixel LED Strip
  */
+
+// Debug logging settings - set to false to reduce serial output
+#define ENABLE_DEBUG_LOGGING false
+#define ENABLE_MOTION_LOGGING false
+#define ENABLE_WIFI_LOGGING true
+#define ENABLE_ESPNOW_LOGGING true
 
 // 🛠 LED & Sensor Config
 #define LED_PIN 5
@@ -17,23 +21,37 @@
 #define DEFAULT_MIN_DISTANCE 30
 #define DEFAULT_MAX_DISTANCE 300
 #define EEPROM_INITIALIZED_MARKER 123
-#define EEPROM_SIZE 512  // Increased to accommodate settings
+#define EEPROM_SIZE 1024
+
+// LED Distribution modes
+#define LED_SEGMENT_MODE_CONTINUOUS 0
+#define LED_SEGMENT_MODE_DISTRIBUTED 1
+
+// LED limits
+#define MAX_SUPPORTED_LEDS 2000
+
+#define ENABLE_MOCK_DEVICES false
 
 // Default color (white)
 #define DEFAULT_RED 255
 #define DEFAULT_GREEN 255
 #define DEFAULT_BLUE 255
 
-// New default settings
+// Default settings
 #define DEFAULT_CENTER_SHIFT 0
 #define DEFAULT_TRAIL_LENGTH 0
 #define DEFAULT_DIRECTION_LIGHT false
 #define DEFAULT_BACKGROUND_MODE false
 #define DEFAULT_LIGHT_MODE 0
 
+// Default LED distribution values
+#define DEFAULT_LED_SEGMENT_MODE LED_SEGMENT_MODE_CONTINUOUS
+#define DEFAULT_LED_SEGMENT_START 0
+#define DEFAULT_LED_SEGMENT_LENGTH 300
+#define DEFAULT_TOTAL_SYSTEM_LEDS 300
+
 // SPIFFS configuration
 #define FORMAT_SPIFFS_IF_FAILED true
-#define SPIFFS_MOUNT_PATH "/spiffs"
 
 // Light mode constants
 #define LIGHT_MODE_STANDARD 0
@@ -49,11 +67,11 @@
 #define LIGHT_MODE_MOTION_PARTICLES 10
 
 #define DEFAULT_MOTION_SMOOTHING_ENABLED true
-#define DEFAULT_POSITION_SMOOTHING_FACTOR 0.2   // Low-pass filter coefficient
-#define DEFAULT_VELOCITY_SMOOTHING_FACTOR 0.1   // Velocity estimation smoothing
-#define DEFAULT_PREDICTION_FACTOR 0.5           // Position prediction factor
-#define DEFAULT_POSITION_P_GAIN 0.1             // Proportional gain for position
-#define DEFAULT_POSITION_I_GAIN 0.01            // Integral gain for position
+#define DEFAULT_POSITION_SMOOTHING_FACTOR 0.2
+#define DEFAULT_VELOCITY_SMOOTHING_FACTOR 0.1
+#define DEFAULT_PREDICTION_FACTOR 0.5
+#define DEFAULT_POSITION_P_GAIN 0.1
+#define DEFAULT_POSITION_I_GAIN 0.01
 #define DEFAULT_EFFECT_SPEED 50
 #define DEFAULT_EFFECT_INTENSITY 50
 
@@ -68,6 +86,28 @@
 
 // 📡 Web Server
 #define WEB_SERVER_PORT 80
+
+// ESP-NOW Master-Slave configuration
+#define DEVICE_ROLE_MASTER 1
+#define DEVICE_ROLE_SLAVE 2
+#define MAX_SLAVE_DEVICES 5
+#define DEFAULT_DEVICE_ROLE DEVICE_ROLE_MASTER
+
+// ESP-NOW improvements
+#define ESPNOW_CHANNEL 1
+#define ESPNOW_RETRY_COUNT 3
+#define ESPNOW_TIMEOUT_MS 5000
+#define AMBISENSE_DEVICE_PREFIX "AmbiSense"
+#define CONNECTION_HEALTH_TIMEOUT 10000
+
+// Sensor priority modes
+#define SENSOR_PRIORITY_MOST_RECENT 0
+#define SENSOR_PRIORITY_SLAVE_FIRST 1  
+#define SENSOR_PRIORITY_MASTER_FIRST 2
+#define SENSOR_PRIORITY_ZONE_BASED 3
+
+// Default setting
+#define DEFAULT_SENSOR_PRIORITY_MODE SENSOR_PRIORITY_ZONE_BASED
 
 // Global variables
 extern int minDistance, maxDistance, brightness, movingLightSpan, numLeds;
@@ -91,8 +131,21 @@ extern float positionIGain;
 extern int effectSpeed;
 extern int effectIntensity;
 
+// LED Distribution globals - declared as extern since they're defined in AmbiSense.ino
+extern int ledSegmentMode;
+extern int ledSegmentStart;
+extern int ledSegmentLength;
+extern int totalSystemLeds;
+
+// ESP-NOW global variables
+extern uint8_t deviceRole;  // Master or slave role
+extern uint8_t masterAddress[6];  // MAC address of master device
+extern uint8_t slaveAddresses[MAX_SLAVE_DEVICES][6];  // MAC addresses of slave devices
+extern uint8_t numSlaveDevices;  // Number of paired slave devices
+extern uint8_t sensorPriorityMode;  // How to prioritize sensors
+
 // EEPROM memory layout - explicitly define segments to avoid conflicts
-// System settings section (0-99)
+// System settings section (0-19)
 #define EEPROM_SYSTEM_START    0
 #define EEPROM_ADDR_MARKER     (EEPROM_SYSTEM_START + 0)
 #define EEPROM_ADDR_MIN_DIST_L (EEPROM_SYSTEM_START + 1)
@@ -133,11 +186,31 @@ extern int effectIntensity;
 #define EEPROM_ADDR_POSITION_I_GAIN_L      (EEPROM_MOTION_START + 9)
 #define EEPROM_ADDR_POSITION_I_GAIN_H      (EEPROM_MOTION_START + 10)
 
+// ESP-NOW settings section (70-99)
+#define EEPROM_ESPNOW_START     70
+#define EEPROM_ADDR_DEVICE_ROLE    (EEPROM_ESPNOW_START + 0)  // 1 byte
+#define EEPROM_ADDR_MASTER_MAC     (EEPROM_ESPNOW_START + 1)  // 6 bytes
+#define EEPROM_ADDR_PAIRED_SLAVES  (EEPROM_ESPNOW_START + 7)  // 1 byte for count + 6*MAX_SLAVES bytes
+#define EEPROM_ADDR_SENSOR_PRIORITY_MODE (EEPROM_ESPNOW_START + 50)  // 1 byte
+
 // WiFi credentials section (100-299)
 #define EEPROM_WIFI_START        100
-#define EEPROM_WIFI_SSID_ADDR    (EEPROM_WIFI_START)
+#define EEPROM_WIFI_MARKER_ADDR  (EEPROM_WIFI_START)      // 2 bytes for marker
+#define EEPROM_WIFI_SSID_ADDR    (EEPROM_WIFI_MARKER_ADDR + 2)
 #define EEPROM_WIFI_PASS_ADDR    (EEPROM_WIFI_SSID_ADDR + MAX_SSID_LENGTH)
 #define EEPROM_DEVICE_NAME_ADDR  (EEPROM_WIFI_PASS_ADDR + MAX_PASSWORD_LENGTH)
 #define EEPROM_WIFI_MODE_ADDR    (EEPROM_DEVICE_NAME_ADDR + MAX_DEVICE_NAME_LENGTH)
+#define EEPROM_WIFI_USE_STATIC_IP (EEPROM_WIFI_MODE_ADDR + 1)
+#define EEPROM_WIFI_STATIC_IP    (EEPROM_WIFI_USE_STATIC_IP + 1)  // 4 bytes
+
+// LED Distribution settings section (300-319)
+#define EEPROM_LED_DIST_START         300
+#define EEPROM_ADDR_LED_SEGMENT_MODE     (EEPROM_LED_DIST_START + 0)
+#define EEPROM_ADDR_LED_SEGMENT_START_L  (EEPROM_LED_DIST_START + 1)
+#define EEPROM_ADDR_LED_SEGMENT_START_H  (EEPROM_LED_DIST_START + 2)
+#define EEPROM_ADDR_LED_SEGMENT_LENGTH_L (EEPROM_LED_DIST_START + 3)
+#define EEPROM_ADDR_LED_SEGMENT_LENGTH_H (EEPROM_LED_DIST_START + 4)
+#define EEPROM_ADDR_TOTAL_SYSTEM_LEDS_L  (EEPROM_LED_DIST_START + 5)
+#define EEPROM_ADDR_TOTAL_SYSTEM_LEDS_H  (EEPROM_LED_DIST_START + 6)
 
 #endif // CONFIG_H

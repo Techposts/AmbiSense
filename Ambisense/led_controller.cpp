@@ -1,19 +1,7 @@
 #include <Adafruit_NeoPixel.h>
+#include <EEPROM.h>  // Add this missing include
 #include "config.h"
 #include "led_controller.h"
-
-// Forward declarations
-void updateStandardMode(int startLed);
-void updateRainbowMode();
-void updateColorWaveMode();
-void updateBreathingMode();
-void updateSolidMode();
-void updateCometMode(int startLed);
-void updatePulseMode(int startLed);
-void updateFireMode();
-void updateTheaterChaseMode();
-void updateDualScanMode(int startLed);
-void updateMotionParticlesMode(int startLed);
 
 // Initialize LED strip - make it global and accessible from other modules
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(DEFAULT_NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
@@ -24,19 +12,121 @@ int effectStep = 0;
 int lastDirection = 0;
 int lastPosition = 0;
 
+// Track current LED configuration
+static int currentConfiguredLeds = DEFAULT_NUM_LEDS;
+
 void setupLEDs() {
-  Serial.println("Initializing LED strip...");
+  Serial.println("Initializing LED strip");
   strip.begin();
   strip.setBrightness(brightness);
   strip.show(); // Initialize all pixels to 'off'
-  Serial.println("LED strip initialized with " + String(numLeds) + " LEDs and brightness " + String(brightness));
+  currentConfiguredLeds = numLeds;
+  Serial.printf("LED strip initialized with %d LEDs\n", numLeds);
 }
 
 void updateLEDConfig() {
-  Serial.println("Updating LED configuration: numLeds=" + String(numLeds) + ", brightness=" + String(brightness));
-  strip.updateLength(numLeds);
-  strip.setBrightness(brightness);
+  if (ENABLE_DEBUG_LOGGING) {
+    Serial.printf("Updating LED configuration from %d to %d LEDs\n", 
+                 currentConfiguredLeds, numLeds);
+  }
+  
+  // Check if LED count actually changed
+  if (currentConfiguredLeds != numLeds) {
+    Serial.printf("LED count changed: %d -> %d. Reinitializing strip...\n", 
+                 currentConfiguredLeds, numLeds);
+    
+    // Clear the current strip
+    strip.clear();
+    strip.show();
+    
+    // CRITICAL FIX: Properly reinitialize the strip with new LED count
+    // The updateLength() method doesn't work reliably, so we recreate the object
+    strip = Adafruit_NeoPixel(numLeds, LED_PIN, NEO_GRB + NEO_KHZ800);
+    strip.begin();
+    strip.setBrightness(brightness);
+    strip.clear();
+    strip.show();
+    
+    currentConfiguredLeds = numLeds;
+    
+    Serial.printf("LED strip reinitialized successfully with %d LEDs\n", numLeds);
+    
+    // Test pattern to verify all LEDs work
+    if (ENABLE_DEBUG_LOGGING) {
+      Serial.println("Running LED test pattern...");
+      for (int i = 0; i < min(numLeds, 10); i++) {
+        strip.setPixelColor(i, strip.Color(255, 0, 0)); // Red test
+        strip.show();
+        delay(50);
+      }
+      strip.clear();
+      strip.show();
+      Serial.println("LED test pattern complete");
+    }
+  } else {
+    // Just update brightness if LED count didn't change
+    strip.setBrightness(brightness);
+  }
+}
+
+// Enhanced LED validation
+bool validateLEDCount(int requestedLeds) {
+  if (requestedLeds < 1) {
+    Serial.println("ERROR: LED count cannot be less than 1");
+    return false;
+  }
+  
+  if (requestedLeds > MAX_SUPPORTED_LEDS) {
+    Serial.printf("ERROR: LED count %d exceeds maximum supported %d\n", 
+                 requestedLeds, MAX_SUPPORTED_LEDS);
+    return false;
+  }
+  
+  // Check available memory for LED buffer
+  size_t ledMemoryRequired = requestedLeds * 3; // 3 bytes per LED (RGB)
+  if (ledMemoryRequired > ESP.getFreeHeap() / 4) { // Use max 25% of free heap
+    Serial.printf("ERROR: Insufficient memory for %d LEDs (need %d bytes)\n", 
+                 requestedLeds, ledMemoryRequired);
+    return false;
+  }
+  
+  return true;
+}
+
+// Force LED strip reinitialization
+void reinitializeLEDStrip(int newLedCount) {
+  if (!validateLEDCount(newLedCount)) {
+    Serial.printf("Cannot reinitialize with %d LEDs, keeping current count %d\n", 
+                 newLedCount, numLeds);
+    return;
+  }
+  
+  Serial.printf("Force reinitializing LED strip: %d -> %d LEDs\n", 
+               currentConfiguredLeds, newLedCount);
+  
+  // Clear current strip
+  strip.clear();
   strip.show();
+  delay(10);
+  
+  // Update global variable
+  numLeds = newLedCount;
+  
+  // Recreate the strip object completely
+  strip = Adafruit_NeoPixel(numLeds, LED_PIN, NEO_GRB + NEO_KHZ800);
+  strip.begin();
+  strip.setBrightness(brightness);
+  strip.clear();
+  strip.show();
+  
+  currentConfiguredLeds = numLeds;
+  
+  Serial.printf("LED strip successfully reinitialized with %d LEDs\n", numLeds);
+  
+  // Save to EEPROM
+  EEPROM.write(EEPROM_ADDR_NUM_LEDS_L, numLeds & 0xFF);
+  EEPROM.write(EEPROM_ADDR_NUM_LEDS_H, (numLeds >> 8) & 0xFF);
+  EEPROM.commit();
 }
 
 // Helper function to create a color with a specific intensity
@@ -93,6 +183,12 @@ uint8_t random8(uint8_t min, uint8_t lim) {
 
 // Update LEDs based on distance reading and current mode
 void updateLEDs(int distance) {
+  // Validate LED count before updating
+  if (numLeds <= 0 || numLeds > MAX_SUPPORTED_LEDS) {
+    Serial.printf("ERROR: Invalid LED count %d, skipping update\n", numLeds);
+    return;
+  }
+  
   // Update direction based on distance change
   int direction = 0;
   if (distance < lastPosition) {
@@ -168,6 +264,10 @@ void updateLEDs(int distance) {
   // Update effect step for animations
   effectStep = (effectStep + 1) % 256;
 }
+
+// Forward declarations for functions used in ESP-NOW
+void processLEDSegmentData(led_segment_data_t segmentData);
+void updateLEDSegment(int globalStartPos, led_segment_data_t segmentData);
 
 // Update LEDs in standard mode (based on distance)
 void updateStandardMode(int startLed) {
@@ -345,9 +445,27 @@ void updateFireMode() {
   // Map effectIntensity (1-100) to cooling rate (20-100)
   int cooling = map(effectIntensity, 1, 100, 20, 100);
   
-  // Array to hold heat values
-  static uint8_t heat[300]; // Assuming max LEDs
-  if (numLeds > 300) return; // Safety check
+  // Dynamic array allocation for heat values
+  static uint8_t* heat = nullptr;
+  static int allocatedLeds = 0;
+  
+  // Reallocate heat array if LED count changed
+  if (allocatedLeds != numLeds) {
+    if (heat != nullptr) {
+      free(heat);
+    }
+    heat = (uint8_t*)malloc(numLeds * sizeof(uint8_t));
+    if (heat == nullptr) {
+      Serial.println("ERROR: Cannot allocate memory for fire effect");
+      return;
+    }
+    // Initialize heat array
+    for (int i = 0; i < numLeds; i++) {
+      heat[i] = 0;
+    }
+    allocatedLeds = numLeds;
+    Serial.printf("Allocated fire effect buffer for %d LEDs\n", numLeds);
+  }
   
   // Step 1: Cool down every cell a little
   for (int i = 0; i < numLeds; i++) {
@@ -361,7 +479,7 @@ void updateFireMode() {
   
   // Step 3: Randomly ignite new sparks near the bottom
   if (random8() < fireSpeed) {
-    int y = random8(7);
+    int y = random8(min(7, numLeds / 4)); // Scale spark area with LED count
     heat[y] = qadd8(heat[y], random8(160, 255));
   }
   
@@ -458,16 +576,28 @@ void updateMotionParticlesMode(int startLed) {
     bool active;
   };
   
-  // Static array to hold particles
-  static Particle particles[20]; // Up to 20 particles
-  static bool initialized = false;
+  // Static array to hold particles - scale with LED count
+  static Particle* particles = nullptr;
+  static int maxParticles = 0;
   
-  // Initialize particles first time
-  if (!initialized) {
-    for (int i = 0; i < 20; i++) {
+  // Reallocate particle array if needed
+  int neededParticles = min(50, numLeds / 10); // Scale particles with LED count
+  if (maxParticles != neededParticles) {
+    if (particles != nullptr) {
+      free(particles);
+    }
+    particles = (Particle*)malloc(neededParticles * sizeof(Particle));
+    if (particles == nullptr) {
+      Serial.println("ERROR: Cannot allocate memory for particles");
+      return;
+    }
+    
+    // Initialize particles
+    for (int i = 0; i < neededParticles; i++) {
       particles[i].active = false;
     }
-    initialized = true;
+    maxParticles = neededParticles;
+    Serial.printf("Allocated particle buffer for %d particles\n", maxParticles);
   }
   
   // Map effectSpeed (1-100) to particle speed (0.5-3.0)
@@ -480,7 +610,7 @@ void updateMotionParticlesMode(int startLed) {
   for (int i = 0; i < spawnRate; i++) {
     if (random(100) < 30) { // 30% chance to spawn a new particle
       // Find an inactive particle slot
-      for (int j = 0; j < 20; j++) {
+      for (int j = 0; j < maxParticles; j++) {
         if (!particles[j].active) {
           particles[j].position = startLed;
           particles[j].velocity = (random(100) / 100.0 * 2.0 - 1.0) * particleMaxSpeed; // Random direction
@@ -496,7 +626,7 @@ void updateMotionParticlesMode(int startLed) {
   strip.clear();
   
   // Update and draw particles
-  for (int i = 0; i < 20; i++) {
+  for (int i = 0; i < maxParticles; i++) {
     if (particles[i].active) {
       // Update position
       particles[i].position += particles[i].velocity;
@@ -517,4 +647,53 @@ void updateMotionParticlesMode(int startLed) {
   }
   
   strip.show();
+}
+
+// Get current configured LED count
+int getCurrentLEDCount() {
+  return currentConfiguredLeds;
+}
+
+// Test all LEDs function
+void testAllLEDs() {
+  Serial.printf("Testing all %d LEDs...\n", numLeds);
+  
+  // Red sweep
+  for (int i = 0; i < numLeds; i++) {
+    strip.setPixelColor(i, strip.Color(255, 0, 0));
+    if (i % 10 == 0) {
+      strip.show();
+      delay(10);
+    }
+  }
+  strip.show();
+  delay(500);
+  
+  // Green sweep
+  for (int i = 0; i < numLeds; i++) {
+    strip.setPixelColor(i, strip.Color(0, 255, 0));
+    if (i % 10 == 0) {
+      strip.show();
+      delay(10);
+    }
+  }
+  strip.show();
+  delay(500);
+  
+  // Blue sweep
+  for (int i = 0; i < numLeds; i++) {
+    strip.setPixelColor(i, strip.Color(0, 0, 255));
+    if (i % 10 == 0) {
+      strip.show();
+      delay(10);
+    }
+  }
+  strip.show();
+  delay(500);
+  
+  // Clear all
+  strip.clear();
+  strip.show();
+  
+  Serial.println("LED test complete");
 }
