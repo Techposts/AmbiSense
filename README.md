@@ -42,7 +42,7 @@ We also developed a [Custom Home Assistant Integration](https://github.com/Techp
 ## 📋 Table of Contents
 
 - [Version History](#-version-history)
-- [What's New in v4.3](#-whats-new-in-v43)
+- [What's New in v5.1](#-whats-new-in-v43)
 - [Key Features](#key-features)
 - [Hardware Requirements](#hardware-requirements)
 - [Circuit Connections](#circuit-connections)
@@ -57,11 +57,11 @@ We also developed a [Custom Home Assistant Integration](https://github.com/Techp
 
 ## 📚 Version History
 
-### **Current Version: v4.3** *(Latest)*
+### **Current Version: v5.1** *(Latest)*
 **Released:** January 2025  
 **Status:** Stable Release  
 
-#### 🚀 What's New in v4.3
+#### 🚀 What's New in v5.1
 - **🔗 Multi-Sensor ESP-NOW Support**: Connect multiple AmbiSense devices for complex layouts
 - **📊 Enhanced Diagnostics**: Real-time monitoring and troubleshooting tools
 - **🛠️ Critical Bug Fixes**: Resolved compilation and stability issues
@@ -72,14 +72,14 @@ We also developed a [Custom Home Assistant Integration](https://github.com/Techp
 - **v4.1** *(April 2024)*: Added expanded light effects, motion smoothing, Home Assistant compatibility
 - **v4.0** *(Initial Release)*: Core radar-controlled LED functionality
 
-> **💡 Upgrade Recommendation**: If you're using v4.1 or earlier, upgrading to v4.3 is strongly recommended for bug fixes and new multi-sensor capabilities.
+> **💡 Upgrade Recommendation**: If you're using v4.1 or earlier, upgrading to v5.1 is strongly recommended for bug fixes and new multi-sensor capabilities.
 
 ---
 
-## 🆕 What's New in v4.3
+## 🆕 What's New in v5.1
 
 ### 🔗 Multi-Sensor ESP-NOW Support
-AmbiSense v4.3 introduces support for multiple devices working together using ESP-NOW wireless communication. Perfect for:
+AmbiSense v5.1 introduces support for multiple devices working together using ESP-NOW wireless communication. Perfect for:
 
 - **L-shaped Staircases**: Place sensors at each turn for seamless lighting transitions
 - **U-shaped Staircases**: Multiple sensors ensure complete coverage without dead zones
@@ -135,7 +135,7 @@ The new **Diagnostics Tab** provides comprehensive system insights:
 - **🌙 Background Lighting**: Optional ambient background illumination when no motion is detected
 - **📍 Center Shift Adjustment**: Reposition the active LED zone relative to detected position
 
-### 🌐 Advanced Connectivity *(New in v4.3)*
+### 🌐 Advanced Connectivity *(New in v5.1)*
 - **🔗 Multi-Sensor Networks**: Connect up to 5 slave devices to one master for complex layouts
 - **📡 ESP-NOW Communication**: Low-latency wireless coordination between devices
 - **🎛️ Distributed LED Control**: Split long LED strips across multiple devices
@@ -254,9 +254,9 @@ The new **Diagnostics Tab** provides comprehensive system insights:
     - Flash Size: `4MB`
 3.  **Add Binary Files with these addresses:**
     ```
-    AmbiSense-ESP32C3-v4.3-bootloader.bin    → 0x0
-    AmbiSense-ESP32C3-v4.3-partitions.bin    → 0x8000
-    AmbiSense-ESP32C3-v4.3.bin               → 0x10000
+    AmbiSense-ESP32C3-v5.1-bootloader.bin    → 0x0
+    AmbiSense-ESP32C3-v5.1-partitions.bin    → 0x8000
+    AmbiSense-ESP32C3-v5.1.bin               → 0x10000
     ```
 4.  **Flash Device**
     - Select COM port and set baud to `921600`
@@ -271,9 +271,9 @@ pip install esptool
 esptool.exe --chip esp32c3 --port COM3 --baud 921600 \
   --before default_reset --after hard_reset write_flash -z \
   --flash_mode dio --flash_freq 80m --flash_size 4MB \
-  0x0 AmbiSense-ESP32C3-v4.3-bootloader.bin \
-  0x8000 AmbiSense-ESP32C3-v4.3-partitions.bin \
-  0x10000 AmbiSense-ESP32C3-v4.3.bin
+  0x0 AmbiSense-ESP32C3-v5.1-bootloader.bin \
+  0x8000 AmbiSense-ESP32C3-v5.1-partitions.bin \
+  0x10000 AmbiSense-ESP32C3-v5.1.bin
 ```
 
 # Troubleshooting Multi-Sensor Issues
@@ -319,7 +319,7 @@ esptool.exe --chip esp32c3 --port COM3 --baud 921600 \
 * **⚡ Effect Speed**: Control animation speed (1-100)
 * **🔥 Effect Intensity**: Adjust effect strength and brightness
 
-## 🔗 Multi-Sensor Tab (New in v4.3)
+## 🔗 Multi-Sensor Tab (New in v5.1)
 * **👑 Device Role Selection**: Configure as Master or Slave
 * **🔍 Device Discovery**: Automatic scanning for nearby AmbiSense devices
 * **📡 Network Management**: Add/remove slave devices
@@ -327,7 +327,7 @@ esptool.exe --chip esp32c3 --port COM3 --baud 921600 \
 * **📊 LED Distribution**: Configure distributed LED control across devices
 * **🩺 Connection Health**: Monitor ESP-NOW network status
 
-## 📊 Diagnostics Tab (New in v4.3)
+## 📊 Diagnostics Tab (New in v5.1)
 * **📡 Live Sensor Data**: Real-time readings from all connected sensors
 * **💚 Connection Status**: ESP-NOW health and signal strength monitoring
 * **📈 Performance Metrics**: Memory usage, packet statistics, system uptime
@@ -442,7 +442,7 @@ Professional enclosure designs for your AmbiSense installation:
 
 ## 🔧 Common Issues
 * **Compilation Errors**:
-    * Ensure you're using AmbiSense v4.3 or later
+    * Ensure you're using AmbiSense v5.1 or later
     * Verify all required libraries are installed
     * Check ESP32 board package is up to date
 * **WiFi Connection Problems**:
