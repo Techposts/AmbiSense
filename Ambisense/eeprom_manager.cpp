@@ -26,9 +26,6 @@ float predictionFactor = DEFAULT_PREDICTION_FACTOR;
 float positionPGain = DEFAULT_POSITION_P_GAIN;
 float positionIGain = DEFAULT_POSITION_I_GAIN;
 
-// LED Distribution settings - these are declared extern since they're defined in AmbiSense.ino
-// Remove the definitions here to avoid multiple definition errors
-
 // Magic marker for EEPROM validation
 #define EEPROM_MAGIC_MARKER 0xA55A
 #define EEPROM_DATA_VERSION 1
@@ -44,6 +41,28 @@ struct EEPROMHeader {
   uint8_t  ledDistSettings; // CRC for LED distribution settings section
   uint8_t  reserved[1];     // Reserved for future use
 };
+
+// Enhanced EEPROM commit with retries
+bool commitEEPROMWithRetry(int maxRetries = 3) {
+  for (int attempt = 1; attempt <= maxRetries; attempt++) {
+    bool success = EEPROM.commit();
+    if (success) {
+      if (attempt > 1) {
+        Serial.printf("EEPROM commit succeeded on attempt %d\n", attempt);
+      }
+      return true;
+    }
+    
+    Serial.printf("EEPROM commit attempt %d failed\n", attempt);
+    
+    if (attempt < maxRetries) {
+      delay(100 * attempt); // Progressive delay
+    }
+  }
+  
+  Serial.printf("EEPROM commit failed after %d attempts\n", maxRetries);
+  return false;
+}
 
 // Additional validation function for critical settings
 void validateCriticalSettings() {
@@ -77,8 +96,8 @@ void validateCriticalSettings() {
     // Recalculate and update CRC
     EEPROM.write(EEPROM_ADDR_CRC, calculateSystemCRC());
     
-    // Commit changes
-    EEPROM.commit();
+    // Commit changes with retry
+    commitEEPROMWithRetry();
     
     // Log the corrected values
     Serial.printf("Corrected settings - Min: %d, Max: %d, LEDs: %d\n", 
@@ -120,7 +139,7 @@ void setupEEPROM() {
     
     // Write the header
     EEPROM.put(0, header);
-    EEPROM.commit();
+    commitEEPROMWithRetry();
     
     Serial.println("EEPROM initialized with defaults");
     return;
@@ -280,7 +299,6 @@ void loadSettings(bool systemValid, bool advancedValid, bool motionValid, bool e
   }
 }
 
-// MOVED OUTSIDE: All the functions that were incorrectly nested inside loadSettings()
 void loadLEDDistributionSettings() {
   ledSegmentMode = EEPROM.read(EEPROM_ADDR_LED_SEGMENT_MODE);
   if (ledSegmentMode != LED_SEGMENT_MODE_CONTINUOUS && 
@@ -389,26 +407,16 @@ void saveSettings() {
   // Write header to EEPROM
   EEPROM.put(0, header);
   
-  // Explicitly commit the data to flash and verify success
-  bool committed = EEPROM.commit();
+  // Commit with retry mechanism
+  bool committed = commitEEPROMWithRetry();
+  
   if (committed) {
-    Serial.println("EEPROM committed successfully");
-    
     // Additional verification for debug
     if (ENABLE_DEBUG_LOGGING) {
       int storedMinDist = EEPROM.read(EEPROM_ADDR_MIN_DIST_L) | (EEPROM.read(EEPROM_ADDR_MIN_DIST_H) << 8);
       int storedMaxDist = EEPROM.read(EEPROM_ADDR_MAX_DIST_L) | (EEPROM.read(EEPROM_ADDR_MAX_DIST_H) << 8);
       Serial.printf("Verification - Min: %d (exp:%d), Max: %d (exp:%d)\n", 
                  storedMinDist, minDistance, storedMaxDist, maxDistance);
-    }
-  } else {
-    // Try again with a delay if the first commit fails
-    Serial.println("ERROR: EEPROM commit failed! Retrying...");
-    delay(100);
-    if (EEPROM.commit()) {
-      Serial.println("EEPROM commit succeeded on retry");
-    } else {
-      Serial.println("ERROR: EEPROM commit failed on retry!");
     }
   }
 }
@@ -444,9 +452,6 @@ void saveSystemSettings() {
   // Add CRC for integrity check
   EEPROM.write(EEPROM_ADDR_CRC, calculateSystemCRC());
   
-  // Ensure this section is committed
-  EEPROM.commit();
-  
   // Debug log for troubleshooting
   if (ENABLE_DEBUG_LOGGING) {
     Serial.printf("Saving Min: %d (0x%02X,0x%02X), Max: %d (0x%02X,0x%02X)\n", 
@@ -466,9 +471,6 @@ void saveAdvancedSettings() {
   EEPROM.write(EEPROM_ADDR_LIGHT_MODE, lightMode);
   EEPROM.write(EEPROM_ADDR_EFFECT_SPEED, effectSpeed);
   EEPROM.write(EEPROM_ADDR_EFFECT_INTENSITY, effectIntensity);
-  
-  // Add explicit commit
-  EEPROM.commit();
 }
 
 void saveMotionSettings() {
@@ -490,9 +492,6 @@ void saveMotionSettings() {
   
   EEPROM.write(EEPROM_ADDR_POSITION_I_GAIN_L, (int)(positionIGain * 1000) & 0xFF);
   EEPROM.write(EEPROM_ADDR_POSITION_I_GAIN_H, ((int)(positionIGain * 1000) >> 8) & 0xFF);
-  
-  // Add explicit commit
-  EEPROM.commit();
 }
 
 void saveEspnowSettings() {
@@ -514,9 +513,6 @@ void saveEspnowSettings() {
       EEPROM.write(EEPROM_ADDR_PAIRED_SLAVES + 1 + (s * 6) + i, slaveAddresses[s][i]);
     }
   }
-  
-  // Add explicit commit
-  EEPROM.commit();
 }
 
 void saveLEDDistributionSettings() {
@@ -528,11 +524,11 @@ void saveLEDDistributionSettings() {
   EEPROM.write(EEPROM_ADDR_LED_SEGMENT_LENGTH_H, (ledSegmentLength >> 8) & 0xFF);
   EEPROM.write(EEPROM_ADDR_TOTAL_SYSTEM_LEDS_L, totalSystemLeds & 0xFF);
   EEPROM.write(EEPROM_ADDR_TOTAL_SYSTEM_LEDS_H, (totalSystemLeds >> 8) & 0xFF);
-  
-  EEPROM.commit();
 }
 
 void resetAllSettings() {
+  Serial.println("Performing complete settings reset...");
+  
   // Reset all settings to defaults
   resetSystemSettings();
   resetAdvancedSettings();
@@ -540,8 +536,15 @@ void resetAllSettings() {
   resetEspnowSettings();
   resetLEDDistributionSettings();
   
-  // Save the defaults to EEPROM
+  // Clear EEPROM sections to ensure clean state
+  for (int i = 0; i < EEPROM_SIZE; i++) {
+    EEPROM.write(i, 0);
+  }
+  
+  // Save the defaults to EEPROM with enhanced retry
   saveSettings();
+  
+  Serial.println("Settings reset complete");
 }
 
 void resetSystemSettings() {
@@ -566,88 +569,88 @@ void resetAdvancedSettings() {
 }
 
 void resetMotionSettings() {
-  motionSmoothingEnabled = DEFAULT_MOTION_SMOOTHING_ENABLED;
-  positionSmoothingFactor = DEFAULT_POSITION_SMOOTHING_FACTOR;
-  velocitySmoothingFactor = DEFAULT_VELOCITY_SMOOTHING_FACTOR;
-  predictionFactor = DEFAULT_PREDICTION_FACTOR;
-  positionPGain = DEFAULT_POSITION_P_GAIN;
-  positionIGain = DEFAULT_POSITION_I_GAIN;
+ motionSmoothingEnabled = DEFAULT_MOTION_SMOOTHING_ENABLED;
+ positionSmoothingFactor = DEFAULT_POSITION_SMOOTHING_FACTOR;
+ velocitySmoothingFactor = DEFAULT_VELOCITY_SMOOTHING_FACTOR;
+ predictionFactor = DEFAULT_PREDICTION_FACTOR;
+ positionPGain = DEFAULT_POSITION_P_GAIN;
+ positionIGain = DEFAULT_POSITION_I_GAIN;
 }
 
 void resetEspnowSettings() {
-  deviceRole = DEFAULT_DEVICE_ROLE;
-  sensorPriorityMode = DEFAULT_SENSOR_PRIORITY_MODE;
-  
-  // Clear master address
-  for (int i = 0; i < 6; i++) {
-    masterAddress[i] = 0;
-  }
-  
-  // Clear slave addresses
-  numSlaveDevices = 0;
-  for (int s = 0; s < MAX_SLAVE_DEVICES; s++) {
-    for (int i = 0; i < 6; i++) {
-      slaveAddresses[s][i] = 0;
-    }
-  }
+ deviceRole = DEFAULT_DEVICE_ROLE;
+ sensorPriorityMode = DEFAULT_SENSOR_PRIORITY_MODE;
+ 
+ // Clear master address
+ for (int i = 0; i < 6; i++) {
+   masterAddress[i] = 0;
+ }
+ 
+ // Clear slave addresses
+ numSlaveDevices = 0;
+ for (int s = 0; s < MAX_SLAVE_DEVICES; s++) {
+   for (int i = 0; i < 6; i++) {
+     slaveAddresses[s][i] = 0;
+   }
+ }
 }
 
 void resetLEDDistributionSettings() {
-  ledSegmentMode = DEFAULT_LED_SEGMENT_MODE;
-  ledSegmentStart = DEFAULT_LED_SEGMENT_START;
-  ledSegmentLength = DEFAULT_LED_SEGMENT_LENGTH;
-  totalSystemLeds = DEFAULT_TOTAL_SYSTEM_LEDS;
+ ledSegmentMode = DEFAULT_LED_SEGMENT_MODE;
+ ledSegmentStart = DEFAULT_LED_SEGMENT_START;
+ ledSegmentLength = DEFAULT_LED_SEGMENT_LENGTH;
+ totalSystemLeds = DEFAULT_TOTAL_SYSTEM_LEDS;
 }
 
 // CRC calculation functions
 uint8_t calculateSystemCRC() {
-  uint8_t crc = 0;
-  
-  for (int i = EEPROM_SYSTEM_START; i < EEPROM_ADVANCED_START; i++) {
-    if (i != EEPROM_ADDR_MARKER) { // Skip marker address for CRC calculation
-      crc ^= EEPROM.read(i);
-    }
-  }
-  
-  return crc;
+ uint8_t crc = 0;
+ 
+ for (int i = EEPROM_SYSTEM_START; i < EEPROM_ADVANCED_START; i++) {
+   if (i != EEPROM_ADDR_MARKER) { // Skip marker address for CRC calculation
+     crc ^= EEPROM.read(i);
+   }
+ }
+ 
+ return crc;
 }
 
 uint8_t calculateAdvancedCRC() {
-  uint8_t crc = 0;
-  
-  for (int i = EEPROM_ADVANCED_START; i < EEPROM_MOTION_START; i++) {
-    crc ^= EEPROM.read(i);
-  }
-  
-  return crc;
+ uint8_t crc = 0;
+ 
+ for (int i = EEPROM_ADVANCED_START; i < EEPROM_MOTION_START; i++) {
+   crc ^= EEPROM.read(i);
+ }
+ 
+ return crc;
 }
 
 uint8_t calculateMotionCRC() {
-  uint8_t crc = 0;
-  
-  for (int i = EEPROM_MOTION_START; i < EEPROM_ESPNOW_START; i++) {
-    crc ^= EEPROM.read(i);
-  }
-  
-  return crc;
+ uint8_t crc = 0;
+ 
+ for (int i = EEPROM_MOTION_START; i < EEPROM_ESPNOW_START; i++) {
+   crc ^= EEPROM.read(i);
+ }
+ 
+ return crc;
 }
 
 uint8_t calculateEspnowCRC() {
-  uint8_t crc = 0;
-  
-  for (int i = EEPROM_ESPNOW_START; i < EEPROM_WIFI_START; i++) {
-    crc ^= EEPROM.read(i);
-  }
-  
-  return crc;
+ uint8_t crc = 0;
+ 
+ for (int i = EEPROM_ESPNOW_START; i < EEPROM_WIFI_START; i++) {
+   crc ^= EEPROM.read(i);
+ }
+ 
+ return crc;
 }
 
 uint8_t calculateLEDDistributionCRC() {
-  uint8_t crc = 0;
-  
-  for (int i = EEPROM_LED_DIST_START; i < EEPROM_LED_DIST_START + 7; i++) {
-    crc ^= EEPROM.read(i);
-  }
-  
-  return crc;
+ uint8_t crc = 0;
+ 
+ for (int i = EEPROM_LED_DIST_START; i < EEPROM_LED_DIST_START + 7; i++) {
+   crc ^= EEPROM.read(i);
+ }
+ 
+ return crc;
 }

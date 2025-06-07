@@ -40,12 +40,12 @@ extern sensor_data_t latestSensorData[MAX_SLAVE_DEVICES + 1];
 void setupESPNOW();
 
 /**
- * Configure master device peers
+ * Configure master device peers with channel handling
  */
 void configureMasterPeers();
 
 /**
- * Configure slave device peer
+ * Configure slave device peer with channel handling
  */
 void configureSlavePeer();
 
@@ -215,10 +215,25 @@ void getNetworkMetrics(uint32_t* totalPacketsReceived, uint32_t* totalPacketsLos
  */
 void espnowMaintenance();
 
+/**
+ * Get current ESP-NOW channel
+ * @return Current channel number
+ */
+int getCurrentESPNowChannel();
+
+/**
+ * Check if ESP-NOW is properly initialized
+ * @return True if initialized, false otherwise
+ */
+bool isESPNowInitialized();
+
 // Callback for ESP-NOW data receive
 void OnDataReceive(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len);
 
 // Callback for ESP-NOW data sent
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status);
+
+// Channel change callback
+void onWiFiChannelChange(int newChannel);
 
 #endif // ESPNOW_MANAGER_H

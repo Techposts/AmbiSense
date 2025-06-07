@@ -1,13 +1,12 @@
 /**
- * AmbiSense v5.1 - Enhanced Radar-Controlled LED System
+ * AmbiSense v5.1.1 - Enhanced Radar-Controlled LED System
  * Created by Ravi Singh (TechPosts media)
  * Copyright © 2025 TechPosts Media. All rights reserved.
  * 
- * This version includes optimizations:
- * - Reduced logging for better performance
- * - Standard WebServer instead of AsyncWebServer
- * - Optimized memory usage and reliability
- * - ESP-NOW master-slave support for L/U-shaped stairs
+ * This version includes critical fixes:
+ * - Fixed factory reset false triggering
+ * - Reverted problematic MAC address logic
+ * - Simplified initialization sequence
  *
  * Hardware: ESP32 + LD2410 Radar Sensor + NeoPixel LED Strip
  */   
@@ -53,23 +52,55 @@ int ledSegmentStart = DEFAULT_LED_SEGMENT_START;
 int ledSegmentLength = DEFAULT_LED_SEGMENT_LENGTH;
 int totalSystemLeds = DEFAULT_TOTAL_SYSTEM_LEDS;
 
-// Function to check for factory reset during boot
+// FIXED: Proper factory reset function with button validation
 void checkForFactoryReset() {
-  // Check if reset button is held during boot
-  if (digitalRead(WIFI_RESET_BUTTON_PIN) == LOW) {
-    Serial.println("Factory reset button detected at startup");
-    delay(3000); // Wait to confirm it's held
-    if (digitalRead(WIFI_RESET_BUTTON_PIN) == LOW) {
-      Serial.println("FACTORY RESET: Resetting all settings to defaults");
-      resetAllSettings();
-      // Visual confirmation
-      for(int i=0; i<3; i++) {
-        digitalWrite(LED_BUILTIN, HIGH);
-        delay(200);
-        digitalWrite(LED_BUILTIN, LOW);
-        delay(200);
-      }
+  // CRITICAL: Only check if button pin is properly configured
+  pinMode(WIFI_RESET_BUTTON_PIN, INPUT_PULLUP);
+  delay(50); // Allow pin to stabilize
+  
+  // Check multiple times to ensure it's not a false reading
+  bool buttonHeld = true;
+  for (int i = 0; i < 5; i++) {
+    if (digitalRead(WIFI_RESET_BUTTON_PIN) != LOW) {
+      buttonHeld = false;
+      break;
     }
+    delay(100);
+  }
+  
+  if (!buttonHeld) {
+    return; // Button not consistently held, exit
+  }
+  
+  Serial.println("Factory reset button confirmed - button is being held");
+  delay(2000); // Additional confirmation time
+  
+  // Final check - button must still be held
+  if (digitalRead(WIFI_RESET_BUTTON_PIN) == LOW) {
+    Serial.println("FACTORY RESET: Resetting all settings to defaults");
+    
+    // Visual confirmation
+    for(int i=0; i<3; i++) {
+      digitalWrite(LED_BUILTIN, HIGH);
+      delay(200);
+      digitalWrite(LED_BUILTIN, LOW);
+      delay(200);
+    }
+    
+    // Perform the reset
+    resetAllSettings();
+    
+    // Additional visual confirmation
+    for(int i=0; i<5; i++) {
+      digitalWrite(LED_BUILTIN, HIGH);
+      delay(100);
+      digitalWrite(LED_BUILTIN, LOW);
+      delay(100);
+    }
+    
+    Serial.println("Factory reset complete");
+  } else {
+    Serial.println("Factory reset cancelled - button released");
   }
 }
 
@@ -77,15 +108,13 @@ void setup() {
   Serial.begin(115200);
   delay(100); // Give serial a moment to initialize
   
-  Serial.println("\n\nAmbiSense v4.3.0 - Radar-Controlled LED System");
+  Serial.println("\n\nAmbiSense v5.1 - Radar-Controlled LED System");
   Serial.println("Copyright © 2025 TechPosts Media.");
+  Serial.println("Enhanced with WiFi/ESP-NOW fixes");
 
-  // Set up reset button
-  pinMode(WIFI_RESET_BUTTON_PIN, INPUT_PULLUP);
+  // Set up pins early
   pinMode(LED_BUILTIN, OUTPUT);
-  
-  // Check for factory reset before initializing EEPROM
-  checkForFactoryReset();
+  pinMode(WIFI_RESET_BUTTON_PIN, INPUT_PULLUP);
 
   // Initialize EEPROM with better error handling
   if (!EEPROM.begin(EEPROM_SIZE)) {
@@ -106,29 +135,61 @@ void setup() {
     }
   }
   
+  // Check for factory reset ONLY if button is actually connected and held
+  checkForFactoryReset();
+
   // Initialize EEPROM before WiFi to ensure settings are loaded
   setupEEPROM();
   
-  // Initialize hardware components
+  // Initialize hardware components BEFORE WiFi
+  Serial.println("Initializing hardware components...");
   setupLEDs();
   updateLEDConfig();
-  
   setupRadar();
   
-  // Initialize WiFi AFTER other hardware is set up
+  // CRITICAL: Initialize WiFi FIRST, let it stabilize
+  Serial.println("Initializing WiFi manager...");
   wifiManager.begin();
   
-  // Initialize ESP-NOW for master-slave communication
+  // Wait for WiFi to be stable before initializing ESP-NOW
+  Serial.println("Waiting for WiFi to stabilize...");
+  delay(2000);  // Give WiFi time to stabilize
+  
+  // Check WiFi status
+  if (wifiManager.getMode() == WIFI_MANAGER_MODE_STA) {
+    Serial.printf("WiFi connected on channel %d\n", WiFi.channel());
+  } else {
+    Serial.printf("WiFi in AP mode on channel %d\n", WiFi.channel());
+  }
+  
+  // SIMPLIFIED: Initialize ESP-NOW without complex MAC checking
+  Serial.println("Initializing ESP-NOW...");
   setupESPNOW();
   
-  // Setup Web server LAST after WiFi is connected
-  setupWebServer();
+  // Verify ESP-NOW initialization
+  if (isESPNowInitialized()) {
+    Serial.printf("ESP-NOW initialized successfully on channel %d\n", getCurrentESPNowChannel());
+    
+    // Verify channel alignment
+    int wifiChannel = WiFi.channel();
+    int espnowChannel = getCurrentESPNowChannel();
+    if (wifiChannel != espnowChannel) {
+      Serial.printf("WARNING: Channel mismatch - WiFi: %d, ESP-NOW: %d\n", 
+                   wifiChannel, espnowChannel);
+    } else {
+      Serial.println("Channel alignment verified");
+    }
+  } else {
+    Serial.println("WARNING: ESP-NOW initialization failed or incomplete");
+  }
   
-  pinMode(WIFI_RESET_BUTTON_PIN, INPUT_PULLUP);
+  // Setup Web server LAST after WiFi and ESP-NOW are initialized
+  Serial.println("Starting web server...");
+  setupWebServer();
 
   Serial.println("System ready.");
   
-  // Log current device role
+  // Log current device role and configuration
   if (deviceRole == DEVICE_ROLE_MASTER) {
     Serial.printf("Device configured as MASTER with %d paired slaves.\n", numSlaveDevices);
   } else if (deviceRole == DEVICE_ROLE_SLAVE) {
@@ -145,6 +206,11 @@ void setup() {
   // Log the CRC for debugging
   uint8_t currentCRC = calculateSystemCRC();
   Serial.printf("Settings CRC: 0x%02X\n", currentCRC);
+  
+  // Print final diagnostics
+  Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
+  Serial.printf("WiFi Mode: %d, Channel: %d\n", wifiManager.getMode(), WiFi.channel());
+  Serial.printf("ESP-NOW initialized: %s\n", isESPNowInitialized() ? "Yes" : "No");
 }
 
 void loop() {
@@ -166,8 +232,13 @@ void loop() {
     return;
   }
 
-  // Process WiFi and radar
+  // CRITICAL: Process WiFi manager first (includes connection monitoring)
   wifiManager.process();
+  
+  // CRITICAL: Process ESP-NOW maintenance (includes channel sync)
+  espnowMaintenance();
+  
+  // Process radar readings
   processRadarReading();
 
   // Handle animation updates at specified interval
@@ -182,7 +253,7 @@ void loop() {
     }
   }
   
-  // Check if WiFi reset button is held for a long time
+  // Enhanced WiFi reset button handling
   static bool longPressDetected = false;
   static unsigned long buttonPressStartTime = 0;
   
@@ -202,11 +273,34 @@ void loop() {
       }
       
       Serial.println("[WiFi] Factory reset detected: Clearing WiFi settings");
+      Serial.println("[ESP-NOW] ESP-NOW will be reinitialized after WiFi reset");
+      
       wifiManager.resetWifiSettings();
     }
   } else {
     buttonPressStartTime = 0;
     longPressDetected = false;
+  }
+  
+  // Periodic diagnostics (every 60 seconds)
+  static unsigned long lastDiagnostics = 0;
+  if (millis() - lastDiagnostics > 60000) {
+    lastDiagnostics = millis();
+    
+    // Quick health check
+    Serial.printf("Health: WiFi=%s, ESP-NOW=%s, Heap=%d\n",
+                 wifiManager.isConnected() ? "OK" : "FAIL",
+                 isESPNowInitialized() ? "OK" : "FAIL",
+                 ESP.getFreeHeap());
+                 
+    // Check for channel mismatches
+    if (isESPNowInitialized()) {
+      int wifiCh = WiFi.channel();
+      int espnowCh = getCurrentESPNowChannel();
+      if (wifiCh != espnowCh) {
+        Serial.printf("WARNING: Channel mismatch - WiFi:%d ESP-NOW:%d\n", wifiCh, espnowCh);
+      }
+    }
   }
 }
 

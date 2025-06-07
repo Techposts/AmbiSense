@@ -3,6 +3,7 @@
 #include "led_controller.h"
 #include "config.h"
 #include "eeprom_manager.h"  // Add this include for LED distribution functions
+#include "wifi_manager.h"   // Add this for channel management
 #include <EEPROM.h>
 
 // Array to store latest readings from each sensor
@@ -36,6 +37,24 @@ struct ZoneSwitchingState {
 };
 
 static ZoneSwitchingState zoneState = {false, 0, 0, false};
+
+// ESP-NOW channel management
+static int currentESPNowChannel = ESPNOW_CHANNEL;
+static bool espnowInitialized = false;
+
+// Channel update callback
+void onWiFiChannelChange(int newChannel) {
+  if (newChannel != currentESPNowChannel && espnowInitialized) {
+    Serial.printf("ESP-NOW: WiFi channel changed from %d to %d, reinitializing ESP-NOW\n", 
+                  currentESPNowChannel, newChannel);
+    currentESPNowChannel = newChannel;
+    
+    // Reinitialize ESP-NOW with new channel
+    esp_now_deinit();
+    delay(100);
+    setupESPNOW();
+  }
+}
 
 // Callback function for when data is sent
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
@@ -86,23 +105,24 @@ void OnDataReceive(const esp_now_recv_info_t *recv_info, const uint8_t *data, in
   }
 }
 
-// Initialize ESP-NOW with improved error handling and channel management
+// Initialize ESP-NOW with simplified logic (remove MAC checking)
 void setupESPNOW() {
   Serial.println("ESP-NOW: Initializing...");
   
-  // Force specific channel for all devices
-  WiFi.disconnect(true);
-  delay(100);
-  WiFi.mode(WIFI_AP_STA);
-  delay(100);
+  // Get current WiFi channel from WiFi manager
+  currentESPNowChannel = wifiManager.getCurrentChannel();
   
-  // Set fixed channel for consistent communication
-  WiFi.channel(ESPNOW_CHANNEL);
+  // Ensure WiFi is properly initialized before ESP-NOW
+  if (WiFi.getMode() == WIFI_OFF) {
+    Serial.println("ESP-NOW: WiFi is off, cannot initialize ESP-NOW");
+    return;
+  }
   
-  // Print MAC address (useful for setup)
+  Serial.printf("ESP-NOW: Using WiFi channel %d\n", currentESPNowChannel);
+  
+  // Print MAC address (useful for setup) - simplified
   Serial.print("ESP-NOW: Device MAC Address: ");
   Serial.println(WiFi.macAddress());
-  Serial.printf("ESP-NOW: Using channel %d\n", ESPNOW_CHANNEL);
   
   // Initialize ESP-NOW with retry logic
   esp_err_t initResult = esp_now_init();
@@ -156,11 +176,16 @@ void setupESPNOW() {
     configureSlavePeer();
   }
   
+  // Set up WiFi channel change callback
+  wifiManager.setESPNowChannelCallback(onWiFiChannelChange);
+  
+  espnowInitialized = true;
+  
   Serial.printf("ESP-NOW: Initialization complete. LED Mode: %s\n", 
                (ledSegmentMode == LED_SEGMENT_MODE_DISTRIBUTED) ? "Distributed" : "Continuous");
 }
 
-// Configure master device peers
+// Configure master device peers with improved channel handling
 void configureMasterPeers() {
   // Read number of paired slaves
   numSlaveDevices = EEPROM.read(EEPROM_ADDR_PAIRED_SLAVES);
@@ -181,10 +206,10 @@ void configureMasterPeers() {
     // Remove peer if it already exists
     esp_now_del_peer(macAddr);
     
-    // Add as new peer with fixed channel
+    // Add as new peer with current WiFi channel
     esp_now_peer_info_t peerInfo = {};
     memcpy(peerInfo.peer_addr, macAddr, 6);
-    peerInfo.channel = ESPNOW_CHANNEL;  // Use fixed channel
+    peerInfo.channel = currentESPNowChannel;  // Use current WiFi channel
     peerInfo.encrypt = false;
     
     char macStr[18];
@@ -195,15 +220,23 @@ void configureMasterPeers() {
     esp_err_t addResult = esp_now_add_peer(&peerInfo);
     if (addResult == ESP_OK) {
       if (ENABLE_ESPNOW_LOGGING) {
-        Serial.printf("ESP-NOW: Successfully added slave peer: %s\n", macStr);
+        Serial.printf("ESP-NOW: Successfully added slave peer: %s (channel %d)\n", 
+                     macStr, currentESPNowChannel);
       }
     } else {
       Serial.printf("ESP-NOW: Failed to add slave peer %s (error: %d)\n", macStr, addResult);
+      
+      // Try with channel 0 (auto)
+      peerInfo.channel = 0;
+      addResult = esp_now_add_peer(&peerInfo);
+      if (addResult == ESP_OK) {
+        Serial.printf("ESP-NOW: Added slave peer %s with auto channel\n", macStr);
+      }
     }
   }
 }
 
-// Configure slave device peer
+// Configure slave device peer with improved channel handling
 void configureSlavePeer() {
   // Read master MAC address
   for (int i = 0; i < 6; i++) {
@@ -227,10 +260,10 @@ void configureSlavePeer() {
   // Remove any existing peer
   esp_now_del_peer(masterAddress);
   
-  // Add master as peer with fixed channel
+  // Add master as peer with current WiFi channel
   esp_now_peer_info_t peerInfo = {};
   memcpy(peerInfo.peer_addr, masterAddress, 6);
-  peerInfo.channel = ESPNOW_CHANNEL;  // Use fixed channel
+  peerInfo.channel = currentESPNowChannel;  // Use current WiFi channel
   peerInfo.encrypt = false;
   
   char macStr[18];
@@ -240,13 +273,23 @@ void configureSlavePeer() {
   
   esp_err_t addResult = esp_now_add_peer(&peerInfo);
   if (addResult == ESP_OK) {
-    Serial.printf("ESP-NOW: Successfully added master peer: %s\n", macStr);
+    Serial.printf("ESP-NOW: Successfully added master peer: %s (channel %d)\n", 
+                 macStr, currentESPNowChannel);
     
     // Send initial test message with delay
     delay(100);
     sendTestMessage();
   } else {
     Serial.printf("ESP-NOW: Failed to add master peer %s (error: %d)\n", macStr, addResult);
+    
+    // Try with channel 0 (auto)
+    peerInfo.channel = 0;
+    addResult = esp_now_add_peer(&peerInfo);
+    if (addResult == ESP_OK) {
+      Serial.printf("ESP-NOW: Added master peer %s with auto channel\n", macStr);
+      delay(100);
+      sendTestMessage();
+    }
   }
 }
 
@@ -703,320 +746,344 @@ int handleZoneBasedPriority(unsigned long currentTime) {
 
 // Set the sensor priority mode
 void setSensorPriorityMode(uint8_t mode) {
-  if (mode <= SENSOR_PRIORITY_ZONE_BASED) {
-    sensorPriorityMode = mode;
-    EEPROM.write(EEPROM_ADDR_SENSOR_PRIORITY_MODE, sensorPriorityMode);
-    EEPROM.commit();
-    
-    // Reset zone state when changing modes
-    if (mode == SENSOR_PRIORITY_ZONE_BASED) {
-      zoneState.initialized = false;
-    }
-    
-    if (ENABLE_ESPNOW_LOGGING) {
-      const char* modeNames[] = {"Most Recent", "Slave First", "Master First", "Zone-Based"};
-      Serial.printf("ESP-NOW: Sensor priority mode set to %s (%d)\n", 
-                   modeNames[mode], mode);
-    }
-  }
+ if (mode <= SENSOR_PRIORITY_ZONE_BASED) {
+   sensorPriorityMode = mode;
+   EEPROM.write(EEPROM_ADDR_SENSOR_PRIORITY_MODE, sensorPriorityMode);
+   EEPROM.commit();
+   
+   // Reset zone state when changing modes
+   if (mode == SENSOR_PRIORITY_ZONE_BASED) {
+     zoneState.initialized = false;
+   }
+   
+   if (ENABLE_ESPNOW_LOGGING) {
+     const char* modeNames[] = {"Most Recent", "Slave First", "Master First", "Zone-Based"};
+     Serial.printf("ESP-NOW: Sensor priority mode set to %s (%d)\n", 
+                  modeNames[mode], mode);
+   }
+ }
 }
 
 // Get the current sensor priority mode
 uint8_t getSensorPriorityMode() {
-  return sensorPriorityMode;
+ return sensorPriorityMode;
 }
 
 // LED Distribution Mode functions
 void setLEDSegmentMode(int mode) {
-  if (mode == LED_SEGMENT_MODE_CONTINUOUS || mode == LED_SEGMENT_MODE_DISTRIBUTED) {
-    ledSegmentMode = mode;
-    saveLEDDistributionSettings();  // This function is from eeprom_manager
-    
-    if (ENABLE_ESPNOW_LOGGING) {
-      Serial.printf("ESP-NOW: LED segment mode set to %s\n", 
-                   (mode == LED_SEGMENT_MODE_DISTRIBUTED) ? "Distributed" : "Continuous");
-    }
-  }
+ if (mode == LED_SEGMENT_MODE_CONTINUOUS || mode == LED_SEGMENT_MODE_DISTRIBUTED) {
+   ledSegmentMode = mode;
+   saveLEDDistributionSettings();  // This function is from eeprom_manager
+   
+   if (ENABLE_ESPNOW_LOGGING) {
+     Serial.printf("ESP-NOW: LED segment mode set to %s\n", 
+                  (mode == LED_SEGMENT_MODE_DISTRIBUTED) ? "Distributed" : "Continuous");
+   }
+ }
 }
 
 int getLEDSegmentMode() {
-  return ledSegmentMode;
+ return ledSegmentMode;
 }
 
 void setLEDSegmentInfo(int start, int length, int total) {
-  ledSegmentStart = constrain(start, 0, total - 1);
-  ledSegmentLength = constrain(length, 1, total);
-  totalSystemLeds = constrain(total, 1, MAX_SUPPORTED_LEDS);
-  
-  saveLEDDistributionSettings();  // This function is from eeprom_manager
-  
-  Serial.printf("ESP-NOW: LED segment info set - Start: %d, Length: %d, Total: %d\n", 
-                ledSegmentStart, ledSegmentLength, totalSystemLeds);
+ ledSegmentStart = constrain(start, 0, total - 1);
+ ledSegmentLength = constrain(length, 1, total);
+ totalSystemLeds = constrain(total, 1, MAX_SUPPORTED_LEDS);
+ 
+ saveLEDDistributionSettings();  // This function is from eeprom_manager
+ 
+ Serial.printf("ESP-NOW: LED segment info set - Start: %d, Length: %d, Total: %d\n", 
+               ledSegmentStart, ledSegmentLength, totalSystemLeds);
 }
 
 void getLEDSegmentInfo(int* start, int* length, int* total) {
-  *start = ledSegmentStart;
-  *length = ledSegmentLength;
-  *total = totalSystemLeds;
+ *start = ledSegmentStart;
+ *length = ledSegmentLength;
+ *total = totalSystemLeds;
 }
 
 // Get connection health status for diagnostics
 bool getSensorHealth(uint8_t sensorId) {
-  if (sensorId <= MAX_SLAVE_DEVICES) {
-    return slaveHealth[sensorId].isHealthy;
-  }
-  return false;
+ if (sensorId <= MAX_SLAVE_DEVICES) {
+   return slaveHealth[sensorId].isHealthy;
+ }
+ return false;
 }
 
 // Get packet statistics for diagnostics
 uint32_t getSensorPacketCount(uint8_t sensorId) {
-  if (sensorId <= MAX_SLAVE_DEVICES) {
-    return slaveHealth[sensorId].packetsReceived;
-  }
-  return 0;
+ if (sensorId <= MAX_SLAVE_DEVICES) {
+   return slaveHealth[sensorId].packetsReceived;
+ }
+ return 0;
 }
 
 // Get last received time for diagnostics
 unsigned long getSensorLastReceived(uint8_t sensorId) {
-  if (sensorId <= MAX_SLAVE_DEVICES) {
-    return slaveHealth[sensorId].lastReceived;
-  }
-  return 0;
+ if (sensorId <= MAX_SLAVE_DEVICES) {
+   return slaveHealth[sensorId].lastReceived;
+ }
+ return 0;
 }
 
 // Reset ESP-NOW and reinitialize (useful for recovery)
 void resetESPNOW() {
-  Serial.println("ESP-NOW: Resetting and reinitializing...");
-  
-  esp_now_deinit();
-  delay(100);
-  
-  setupESPNOW();
+ Serial.println("ESP-NOW: Resetting and reinitializing...");
+ 
+ esp_now_deinit();
+ espnowInitialized = false;
+ delay(100);
+ 
+ setupESPNOW();
 }
 
 // Enhanced diagnostic information
 void printESPNOWDiagnostics() {
-  Serial.println("\n=== ESP-NOW Diagnostics ===");
-  Serial.printf("Device Role: %s\n", 
-                (deviceRole == DEVICE_ROLE_MASTER) ? "Master" : "Slave");
-  Serial.printf("Priority Mode: %d\n", sensorPriorityMode);
-  Serial.printf("Channel: %d\n", ESPNOW_CHANNEL);
-  Serial.printf("LED Mode: %s\n", 
-                (ledSegmentMode == LED_SEGMENT_MODE_DISTRIBUTED) ? "Distributed" : "Continuous");
-  
-  if (ledSegmentMode == LED_SEGMENT_MODE_DISTRIBUTED) {
-    Serial.printf("LED Segment: Start=%d, Length=%d, Total=%d\n", 
-                  ledSegmentStart, ledSegmentLength, totalSystemLeds);
-  }
-  
-  if (deviceRole == DEVICE_ROLE_MASTER) {
-    Serial.printf("Paired Slaves: %d\n", numSlaveDevices);
-    for (int i = 0; i <= numSlaveDevices; i++) {
-      Serial.printf("Sensor %d: %s, Packets: %d, Last: %lu ms ago\n",
-                    i,
-                    slaveHealth[i].isHealthy ? "Healthy" : "Disconnected",
-                    slaveHealth[i].packetsReceived,
-                    millis() - slaveHealth[i].lastReceived);
-    }
-    
-    if (sensorPriorityMode == SENSOR_PRIORITY_ZONE_BASED) {
-      Serial.printf("Zone State: Using %s, Last switch: %lu ms ago\n",
-                    zoneState.usingSlaveReading ? "Slave" : "Master",
-                    millis() - zoneState.lastSwitchTime);
-    }
-  } else {
-    char macStr[18];
-    sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X", 
-            masterAddress[0], masterAddress[1], masterAddress[2], 
-            masterAddress[3], masterAddress[4], masterAddress[5]);
-    Serial.printf("Master MAC: %s\n", macStr);
-  }
-  
-  // Memory usage
-  Serial.printf("Free Heap: %d bytes\n", ESP.getFreeHeap());
-  Serial.printf("Min Free Heap: %d bytes\n", ESP.getMinFreeHeap());
-  
-  Serial.println("========================\n");
+ Serial.println("\n=== ESP-NOW Diagnostics ===");
+ Serial.printf("Device Role: %s\n", 
+               (deviceRole == DEVICE_ROLE_MASTER) ? "Master" : "Slave");
+ Serial.printf("Priority Mode: %d\n", sensorPriorityMode);
+ Serial.printf("Channel: %d\n", currentESPNowChannel);
+ Serial.printf("WiFi Channel: %d\n", WiFi.channel());
+ Serial.printf("LED Mode: %s\n", 
+               (ledSegmentMode == LED_SEGMENT_MODE_DISTRIBUTED) ? "Distributed" : "Continuous");
+ 
+ if (ledSegmentMode == LED_SEGMENT_MODE_DISTRIBUTED) {
+   Serial.printf("LED Segment: Start=%d, Length=%d, Total=%d\n", 
+                 ledSegmentStart, ledSegmentLength, totalSystemLeds);
+ }
+ 
+ if (deviceRole == DEVICE_ROLE_MASTER) {
+   Serial.printf("Paired Slaves: %d\n", numSlaveDevices);
+   for (int i = 0; i <= numSlaveDevices; i++) {
+     Serial.printf("Sensor %d: %s, Packets: %d, Last: %lu ms ago\n",
+                   i,
+                   slaveHealth[i].isHealthy ? "Healthy" : "Disconnected",
+                   slaveHealth[i].packetsReceived,
+                   millis() - slaveHealth[i].lastReceived);
+   }
+   
+   if (sensorPriorityMode == SENSOR_PRIORITY_ZONE_BASED) {
+     Serial.printf("Zone State: Using %s, Last switch: %lu ms ago\n",
+                   zoneState.usingSlaveReading ? "Slave" : "Master",
+                   millis() - zoneState.lastSwitchTime);
+   }
+ } else {
+   char macStr[18];
+   sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X", 
+           masterAddress[0], masterAddress[1], masterAddress[2], 
+           masterAddress[3], masterAddress[4], masterAddress[5]);
+   Serial.printf("Master MAC: %s\n", macStr);
+ }
+ 
+ // Memory usage
+ Serial.printf("Free Heap: %d bytes\n", ESP.getFreeHeap());
+ Serial.printf("Min Free Heap: %d bytes\n", ESP.getMinFreeHeap());
+ 
+ Serial.println("========================\n");
 }
 
 // Force synchronize all devices (master only)
 void synchronizeAllDevices() {
-  if (deviceRole != DEVICE_ROLE_MASTER) return;
-  
-  Serial.println("ESP-NOW: Synchronizing all devices...");
-  
-  // Send current settings to all slaves
-  led_segment_data_t syncData;
-  syncData.sensorId = 0;
-  syncData.distance = currentDistance;
-  syncData.direction = 0;
-  syncData.timestamp = millis();
-  syncData.totalLeds = totalSystemLeds;
-  syncData.lightMode = lightMode;
-  syncData.brightness = brightness;
-  syncData.redValue = redValue;
-  syncData.greenValue = greenValue;
-  syncData.blueValue = blueValue;
-  
-  for (int i = 0; i < numSlaveDevices; i++) {
-    // Calculate segment for this slave
-    int ledsPerDevice = totalSystemLeds / (numSlaveDevices + 1);
-    syncData.startLed = (i + 1) * ledsPerDevice;
-    syncData.segmentLength = ledsPerDevice;
-    
-    esp_err_t result = esp_now_send(slaveAddresses[i], 
-                                    (uint8_t*)&syncData, 
-                                    sizeof(led_segment_data_t));
-    
-    if (result == ESP_OK) {
-      Serial.printf("ESP-NOW: Sync data sent to slave %d\n", i);
-    } else {
-      Serial.printf("ESP-NOW: Failed to sync slave %d (error: %d)\n", i, result);
-    }
-    
-    delay(10); // Small delay between sends
-  }
-  
-  Serial.println("ESP-NOW: Synchronization complete");
+ if (deviceRole != DEVICE_ROLE_MASTER) return;
+ 
+ Serial.println("ESP-NOW: Synchronizing all devices...");
+ 
+ // Send current settings to all slaves
+ led_segment_data_t syncData;
+ syncData.sensorId = 0;
+ syncData.distance = currentDistance;
+ syncData.direction = 0;
+ syncData.timestamp = millis();
+ syncData.totalLeds = totalSystemLeds;
+ syncData.lightMode = lightMode;
+ syncData.brightness = brightness;
+ syncData.redValue = redValue;
+ syncData.greenValue = greenValue;
+ syncData.blueValue = blueValue;
+ 
+ for (int i = 0; i < numSlaveDevices; i++) {
+   // Calculate segment for this slave
+   int ledsPerDevice = totalSystemLeds / (numSlaveDevices + 1);
+   syncData.startLed = (i + 1) * ledsPerDevice;
+   syncData.segmentLength = ledsPerDevice;
+   
+   esp_err_t result = esp_now_send(slaveAddresses[i], 
+                                   (uint8_t*)&syncData, 
+                                   sizeof(led_segment_data_t));
+   
+   if (result == ESP_OK) {
+     Serial.printf("ESP-NOW: Sync data sent to slave %d\n", i);
+   } else {
+     Serial.printf("ESP-NOW: Failed to sync slave %d (error: %d)\n", i, result);
+   }
+   
+   delay(10); // Small delay between sends
+ }
+ 
+ Serial.println("ESP-NOW: Synchronization complete");
 }
 
 // Get system status for web interface
 void getSystemStatus(char* statusJson, size_t maxLength) {
-  snprintf(statusJson, maxLength,
-    "{"
-    "\"role\":%d,"
-    "\"priorityMode\":%d,"
-    "\"ledMode\":%d,"
-    "\"ledSegmentStart\":%d,"
-    "\"ledSegmentLength\":%d,"
-    "\"totalSystemLeds\":%d,"
-    "\"numSlaves\":%d,"
-    "\"channel\":%d,"
-    "\"currentDistance\":%d,"
-    "\"usingSlaveReading\":%s,"
-    "\"freeHeap\":%d"
-    "}",
-    deviceRole,
-    sensorPriorityMode,
-    ledSegmentMode,
-    ledSegmentStart,
-    ledSegmentLength,
-    totalSystemLeds,
-    numSlaveDevices,
-    ESPNOW_CHANNEL,
-    currentDistance,
-    (zoneState.usingSlaveReading ? "true" : "false"),
-    ESP.getFreeHeap()
-  );
+ snprintf(statusJson, maxLength,
+   "{"
+   "\"role\":%d,"
+   "\"priorityMode\":%d,"
+   "\"ledMode\":%d,"
+   "\"ledSegmentStart\":%d,"
+   "\"ledSegmentLength\":%d,"
+   "\"totalSystemLeds\":%d,"
+   "\"numSlaves\":%d,"
+   "\"channel\":%d,"
+   "\"wifiChannel\":%d,"
+   "\"currentDistance\":%d,"
+   "\"usingSlaveReading\":%s,"
+   "\"freeHeap\":%d,"
+   "\"espnowInitialized\":%s"
+   "}",
+   deviceRole,
+   sensorPriorityMode,
+   ledSegmentMode,
+   ledSegmentStart,
+   ledSegmentLength,
+   totalSystemLeds,
+   numSlaveDevices,
+   currentESPNowChannel,
+   WiFi.channel(),
+   currentDistance,
+   (zoneState.usingSlaveReading ? "true" : "false"),
+   ESP.getFreeHeap(),
+   (espnowInitialized ? "true" : "false")
+ );
 }
 
 // Emergency stop all LEDs across the network
 void emergencyStopAllLEDs() {
-  if (deviceRole == DEVICE_ROLE_MASTER) {
-    Serial.println("ESP-NOW: Emergency stop - turning off all LEDs");
-    
-    // Turn off local LEDs
-    strip.clear();
-    strip.show();
-    
-    // Send emergency stop to all slaves
-    led_segment_data_t stopData = {0};
-    stopData.sensorId = 255; // Special ID for emergency stop
-    stopData.distance = 0;
-    stopData.timestamp = millis();
-    stopData.brightness = 0;
-    
-    for (int i = 0; i < numSlaveDevices; i++) {
-      esp_now_send(slaveAddresses[i], (uint8_t*)&stopData, sizeof(led_segment_data_t));
-      delay(5);
-    }
-  } else {
-    // Slave emergency stop
-    strip.clear();
-    strip.show();
-  }
+ if (deviceRole == DEVICE_ROLE_MASTER) {
+   Serial.println("ESP-NOW: Emergency stop - turning off all LEDs");
+   
+   // Turn off local LEDs
+   strip.clear();
+   strip.show();
+   
+   // Send emergency stop to all slaves
+   led_segment_data_t stopData = {0};
+   stopData.sensorId = 255; // Special ID for emergency stop
+   stopData.distance = 0;
+   stopData.timestamp = millis();
+   stopData.brightness = 0;
+   
+   for (int i = 0; i < numSlaveDevices; i++) {
+     esp_now_send(slaveAddresses[i], (uint8_t*)&stopData, sizeof(led_segment_data_t));
+     delay(5);
+   }
+ } else {
+   // Slave emergency stop
+   strip.clear();
+   strip.show();
+ }
 }
 
 // Process emergency stop (for slaves)
 void processEmergencyStop() {
-  Serial.println("ESP-NOW: Emergency stop received");
-  strip.clear();
-  strip.show();
+ Serial.println("ESP-NOW: Emergency stop received");
+ strip.clear();
+ strip.show();
 }
 
 // Enhanced packet loss detection
 void checkPacketLoss() {
-  if (deviceRole != DEVICE_ROLE_MASTER) return;
-  
-  unsigned long currentTime = millis();
-  static unsigned long lastPacketLossCheck = 0;
-  
-  if (currentTime - lastPacketLossCheck > 30000) { // Check every 30 seconds
-    lastPacketLossCheck = currentTime;
-    
-    for (int i = 1; i <= numSlaveDevices; i++) {
-      unsigned long timeSinceLastPacket = currentTime - slaveHealth[i].lastReceived;
-      
-      if (timeSinceLastPacket > 60000) { // No packet for 1 minute
-        Serial.printf("ESP-NOW: WARNING - Sensor %d has been offline for %lu seconds\n", 
-                      i, timeSinceLastPacket / 1000);
-        
-        // Mark as unhealthy
-        slaveHealth[i].isHealthy = false;
-        
-        // Consider automatic slave removal after extended offline period
-        if (timeSinceLastPacket > 300000) { // 5 minutes
-          Serial.printf("ESP-NOW: Considering removal of sensor %d (offline for 5+ minutes)\n", i);
-        }
-      }
-    }
-  }
+ if (deviceRole != DEVICE_ROLE_MASTER) return;
+ 
+ unsigned long currentTime = millis();
+ static unsigned long lastPacketLossCheck = 0;
+ 
+ if (currentTime - lastPacketLossCheck > 30000) { // Check every 30 seconds
+   lastPacketLossCheck = currentTime;
+   
+   for (int i = 1; i <= numSlaveDevices; i++) {
+     unsigned long timeSinceLastPacket = currentTime - slaveHealth[i].lastReceived;
+     
+     if (timeSinceLastPacket > 60000) { // No packet for 1 minute
+       Serial.printf("ESP-NOW: WARNING - Sensor %d has been offline for %lu seconds\n", 
+                     i, timeSinceLastPacket / 1000);
+       
+       // Mark as unhealthy
+       slaveHealth[i].isHealthy = false;
+       
+       // Consider automatic slave removal after extended offline period
+       if (timeSinceLastPacket > 300000) { // 5 minutes
+         Serial.printf("ESP-NOW: Considering removal of sensor %d (offline for 5+ minutes)\n", i);
+       }
+     }
+   }
+ }
 }
 
 // Auto-discovery mode for new slaves
 void startSlaveDiscovery(unsigned long duration) {
-  if (deviceRole != DEVICE_ROLE_MASTER) return;
-  
-  Serial.printf("ESP-NOW: Starting slave discovery for %lu seconds\n", duration / 1000);
-  
-  // Implementation would involve listening for discovery packets
-  // and automatically adding responsive slaves
-  // This is a framework for future enhancement
+ if (deviceRole != DEVICE_ROLE_MASTER) return;
+ 
+ Serial.printf("ESP-NOW: Starting slave discovery for %lu seconds\n", duration / 1000);
+ 
+ // Implementation would involve listening for discovery packets
+ // and automatically adding responsive slaves
+ // This is a framework for future enhancement
 }
 
 // Network performance metrics
 void getNetworkMetrics(uint32_t* totalPacketsReceived, uint32_t* totalPacketsLost, 
-                      float* averageRSSI) {
-  *totalPacketsReceived = 0;
-  *totalPacketsLost = 0;
-  *averageRSSI = 0;
-  
-  int activeSensors = 0;
-  
-  for (int i = 0; i <= numSlaveDevices; i++) {
-    *totalPacketsReceived += slaveHealth[i].packetsReceived;
-    *totalPacketsLost += slaveHealth[i].packetsLost;
-    
-    if (slaveHealth[i].isHealthy) {
-      activeSensors++;
-    }
-  }
-  
-  // RSSI would need to be tracked separately in real implementation
-  *averageRSSI = -50.0; // Placeholder
+                     float* averageRSSI) {
+ *totalPacketsReceived = 0;
+ *totalPacketsLost = 0;
+ *averageRSSI = 0;
+ 
+ int activeSensors = 0;
+ 
+ for (int i = 0; i <= numSlaveDevices; i++) {
+   *totalPacketsReceived += slaveHealth[i].packetsReceived;
+   *totalPacketsLost += slaveHealth[i].packetsLost;
+   
+   if (slaveHealth[i].isHealthy) {
+     activeSensors++;
+   }
+ }
+ 
+ // RSSI would need to be tracked separately in real implementation
+ *averageRSSI = -50.0; // Placeholder
 }
 
 // Periodic maintenance function - call this from main loop
 void espnowMaintenance() {
-  static unsigned long lastMaintenance = 0;
-  unsigned long currentTime = millis();
-  
-  if (currentTime - lastMaintenance > 5000) { // Every 5 seconds
-    lastMaintenance = currentTime;
-    
-    checkConnectionHealth();
-    checkPacketLoss();
-    
-    // Additional maintenance tasks can be added here
-  }
+ static unsigned long lastMaintenance = 0;
+ unsigned long currentTime = millis();
+ 
+ if (currentTime - lastMaintenance > 5000) { // Every 5 seconds
+   lastMaintenance = currentTime;
+   
+   checkConnectionHealth();
+   checkPacketLoss();
+   
+   // Check if ESP-NOW channel matches WiFi channel
+   int wifiChannel = WiFi.channel();
+   if (wifiChannel != currentESPNowChannel && espnowInitialized) {
+     Serial.printf("ESP-NOW: Channel mismatch detected (ESP-NOW: %d, WiFi: %d)\n", 
+                  currentESPNowChannel, wifiChannel);
+     onWiFiChannelChange(wifiChannel);
+   }
+   
+   // Additional maintenance tasks can be added here
+ }
+}
+
+// Get current ESP-NOW channel
+int getCurrentESPNowChannel() {
+ return currentESPNowChannel;
+}
+
+// Check if ESP-NOW is properly initialized
+bool isESPNowInitialized() {
+ return espnowInitialized;
 }
