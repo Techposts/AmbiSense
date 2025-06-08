@@ -4,7 +4,6 @@
 #include <stdexcept>  // For std::exception
 #include <Arduino.h>
 #include <vector>
-#include <functional>  // For std::function
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
@@ -17,7 +16,6 @@
 
 // Wi-Fi operation modes
 enum WifiManagerMode {
-  WIFI_MANAGER_MODE_NONE,     // No specific mode set
   WIFI_MANAGER_MODE_AP,       // Access Point mode (initial setup)
   WIFI_MANAGER_MODE_STA,      // Station mode (connected to home network)
   WIFI_MANAGER_MODE_FALLBACK  // Fallback to AP mode when connection fails
@@ -36,16 +34,10 @@ public:
   // Initialize WiFi manager
   void begin();
 
-  // Setup Access Point mode (improved version)
-  bool startAPModeImproved();
-  
-  // Setup Access Point mode (legacy compatibility)
+  // Setup Access Point mode
   bool startAPMode();
 
-  // Connect to Wi-Fi network with improved logic
-  bool connectToWifiImproved(const char* ssid, const char* password);
-  
-  // Connect to Wi-Fi network (legacy compatibility)
+  // Connect to Wi-Fi network in Station mode
   bool connectToWifi(const char* ssid, const char* password);
 
   // Setup mDNS with given hostname
@@ -66,14 +58,11 @@ public:
   // Get current IP address (AP or STA)
   String getIPAddress();
 
+  // Clean network name of invalid characters
+  String cleanNetworkName(const String& rawName);
+
   // Get current Wi-Fi mode
   WifiManagerMode getMode();
-
-  // Get current WiFi channel
-  int getCurrentChannel();
-
-  // Set callback for ESP-NOW channel updates
-  void setESPNowChannelCallback(std::function<void(int)> callback);
 
   // Get sanitized mDNS hostname
   String getSanitizedHostname(const char* deviceName);
@@ -87,23 +76,20 @@ public:
   // Update LED status indicator
   void updateLedStatus();
   
-  // Check and handle WiFi connection status with improved logic
+  // Check and handle WiFi connection status
   void checkWifiConnection();
-  
-  // Get WiFi status as human-readable string
-  const char* getWiFiStatusString(int status);
-  
-  // Handle pending mode changes
-  void handleModeChange();
 
 private:
   WifiManagerMode _currentMode = WIFI_MANAGER_MODE_AP;
-  WifiManagerMode _pendingModeChange = WIFI_MANAGER_MODE_NONE;
   unsigned long _lastWifiCheck = 0;
   int _connectionAttempts = 0;
   bool _mDNSStarted = false;
-  int _currentChannel = 1;
-  std::function<void(int)> _espnowChannelCallback = nullptr;
+  unsigned long _lastLedUpdateTime = 0;
+  int _ledBlinkPhase = 0;
+  bool _ledState = HIGH;
+  
+  // Configure static IP if enabled
+  void configureStaticIP();
 };
 
 // Global instance

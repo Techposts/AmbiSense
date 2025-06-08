@@ -2,7 +2,7 @@
 #define CONFIG_H
 
 /*
- * AmbiSense v5.1.1 - Enhanced Radar-Controlled LED System
+ * AmbiSense v4.3.0 - Enhanced Radar-Controlled LED System
  * Created by Ravi Singh (techPosts media)
  * Copyright © 2025 TechPosts Media. All rights reserved.
  */
@@ -87,14 +87,14 @@
 // 📡 Web Server
 #define WEB_SERVER_PORT 80
 
-// ESP-NOW Master-Slave configuration with FIXED CHANNEL
+// ESP-NOW Master-Slave configuration
 #define DEVICE_ROLE_MASTER 1
 #define DEVICE_ROLE_SLAVE 2
 #define MAX_SLAVE_DEVICES 5
 #define DEFAULT_DEVICE_ROLE DEVICE_ROLE_MASTER
 
-// ESP-NOW improvements - CRITICAL: Use fixed channel
-#define ESPNOW_CHANNEL 1                    // FIXED channel for ESP-NOW
+// ESP-NOW improvements
+#define ESPNOW_CHANNEL 1
 #define ESPNOW_RETRY_COUNT 3
 #define ESPNOW_TIMEOUT_MS 5000
 #define AMBISENSE_DEVICE_PREFIX "AmbiSense"
