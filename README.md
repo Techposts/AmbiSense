@@ -213,6 +213,12 @@ The new **Diagnostics Tab** provides comprehensive system insights:
   <em>Complete wiring diagram for single AmbiSense device</em>
 </p>
 
+<p align="center">
+  <img src="https://github.com/Techposts/AmbiSense/blob/main/Assets/TTP%20Touch%20sensor.png" width="800" alt="TTP TouchSensor Short A to GND">
+  <br>
+  <em>Short the A to GND on the Touch Sensor</em>
+</p>
+
 > **⚠️ Power Supply Notes:**
 > - For LED strips longer than 30 LEDs, connect 5V power supply directly to WS2812B VCC
 > - Calculate power needs: ~60mA per LED at full brightness
