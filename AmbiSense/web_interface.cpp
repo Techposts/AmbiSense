@@ -1142,10 +1142,10 @@ void handleAddSlave() {
         }
         EEPROM.commit();
         
-        // Add as ESP-NOW peer
+        // Add as ESP-NOW peer with correct channel
         esp_now_peer_info_t peerInfo = {};
         memcpy(peerInfo.peer_addr, mac, 6);
-        peerInfo.channel = 0; // Use WiFi channel 0
+        peerInfo.channel = ESPNOW_CHANNEL; // Use fixed ESP-NOW channel
         peerInfo.encrypt = false; // No encryption for simplicity
         
         if (esp_now_add_peer(&peerInfo) == ESP_OK) {
@@ -1319,9 +1319,9 @@ void handleSetMasterMac() {
         }
       }
       
-      // Add the master as a peer with auto channel selection
+      // Add the master as a peer with fixed channel
       memcpy(peerInfo.peer_addr, masterAddress, 6);
-      peerInfo.channel = WiFi.channel(); // Use current WiFi channel
+      peerInfo.channel = ESPNOW_CHANNEL; // Use fixed ESP-NOW channel
       peerInfo.encrypt = false;
       
       // Try to add the peer

@@ -1,5 +1,5 @@
 /**
- * AmbiSense v5.1 - Enhanced Radar-Controlled LED System
+ * AmbiSense v5.1.1 - Enhanced Radar-Controlled LED System
  * Created by Ravi Singh (TechPosts media)
  * Copyright © 2025 TechPosts Media. All rights reserved.
  * 

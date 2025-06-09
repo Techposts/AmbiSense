@@ -383,15 +383,37 @@ const char mesh_tab_full[] PROGMEM = R"literal(
 .priority-inactive{background:#666}
 </style>
 
-<div class="section-header">🧭 Device Role</div>
+<div class="section-header">🧭 Device Configuration</div>
 <div class="form-group">
 <label>Device Role</label>
 <select id="deviceRole" onchange="updateDeviceRole(this.value)" style="width:100%;padding:12px;border-radius:8px;background:#333;color:#fff;border:none;font-size:14px;">
 <option value="1">Master</option>
 <option value="2">Slave</option>
-<option value="0">Standalone</option>
 </select>
-<small class="input-description">Master aggregates data, Slave sends data, Standalone works independently</small>
+<small class="input-description">Master aggregates sensor data from multiple Slaves and controls LED effects</small>
+</div>
+
+<div class="form-group">
+<label>Device MAC Address</label>
+<div style="display:flex;gap:10px;align-items:center;">
+<div style="flex:1;padding:10px;background:#333;border-radius:6px;font-family:monospace;font-size:14px;color:#4cc9f0;text-align:center;border:2px solid #4cc9f0;">
+<span id="deviceMac">Loading...</span>
+</div>
+<button onclick="copyMacAddress()" style="padding:10px;background:#4361ee;color:white;border:none;border-radius:6px;cursor:pointer;font-size:12px;min-width:60px;">Copy</button>
+</div>
+<small class="input-description" id="macDescription">This device's MAC address for ESP-NOW pairing</small>
+</div>
+
+<div class="form-group" id="masterMacSection" style="display:none;">
+<label>Master MAC Address</label>
+<div style="display:flex;gap:10px;">
+<input type="text" id="masterMacInput" placeholder="XX:XX:XX:XX:XX:XX" maxlength="17" style="flex:1;padding:10px;border-radius:6px;background:#333;color:#fff;border:none;font-family:monospace;text-transform:uppercase;">
+<button onclick="setMasterMac()" style="padding:10px 20px;background:#4cc9f0;color:#000;border:none;border-radius:6px;font-weight:600;cursor:pointer;">Connect</button>
+</div>
+<div id="connectionStatus" style="margin-top:10px;padding:8px;border-radius:6px;display:none;">
+<div id="connectionStatusText" style="font-size:14px;"></div>
+</div>
+<small class="input-description">Enter the Master device's MAC address to establish ESP-NOW connection</small>
 </div>
 
 <div class="section-header">🧱 Segment Settings</div>
@@ -514,17 +536,138 @@ function initMeshTab() {
 
 // Update device role
 function updateDeviceRole(role) {
+  // Show/hide Master MAC input section based on role
+  const masterMacSection = document.getElementById('masterMacSection');
+  const macDescription = document.getElementById('macDescription');
+  
+  if (role == 2) { // Slave role
+    masterMacSection.style.display = 'block';
+    macDescription.textContent = 'This device\'s MAC address - share with Master device for pairing';
+  } else { // Master role
+    masterMacSection.style.display = 'none';
+    macDescription.textContent = 'This device\'s MAC address for ESP-NOW pairing';
+  }
+  
   fetch('/setDeviceRole?role=' + role)
     .then(r => r.json())
     .then(data => {
       if (data.status === 'success') {
         showSavedNotification();
         loadDeviceInfo();
+        // Show success message
+        alert('Device role updated successfully!\n\nRole: ' + (role == 1 ? 'Master' : 'Slave') + '\n\nPage will refresh in 2 seconds to apply changes.');
         // Refresh page after role change
         setTimeout(() => location.reload(), 2000);
+      } else {
+        alert('Failed to update device role: ' + (data.message || 'Unknown error'));
+        // Revert dropdown to previous value
+        loadDeviceInfo();
       }
     })
-    .catch(error => console.error('Error updating device role:', error));
+    .catch(error => {
+      console.error('Error updating device role:', error);
+      alert('Network error updating device role. Please try again.');
+      // Revert dropdown to previous value
+      loadDeviceInfo();
+    });
+}
+
+// Set Master MAC Address (missing function implementation)
+function setMasterMac() {
+  const macInput = document.getElementById('masterMacInput');
+  const mac = macInput.value.trim();
+  
+  // Validate MAC address format
+  const macPattern = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
+  if (!mac || !macPattern.test(mac)) {
+    alert('Please enter a valid MAC address in format XX:XX:XX:XX:XX:XX');
+    return;
+  }
+  
+  // Convert to uppercase and consistent format
+  const formattedMac = mac.toUpperCase().replace(/[-]/g, ':');
+  
+  fetch('/setMasterMac?mac=' + encodeURIComponent(formattedMac))
+    .then(r => r.json())
+    .then(data => {
+      if (data.status === 'success') {
+        showSavedNotification();
+        
+        // Update connection status immediately
+        const connectionStatus = document.getElementById('connectionStatus');
+        const connectionStatusText = document.getElementById('connectionStatusText');
+        connectionStatus.style.display = 'block';
+        connectionStatus.style.background = '#1a4a4a';
+        connectionStatus.style.borderLeft = '4px solid #4cc9f0';
+        connectionStatusText.innerHTML = '🟢 Connected to Master: ' + formattedMac;
+        connectionStatusText.style.color = '#4cc9f0';
+        
+        // Update input styling
+        macInput.value = formattedMac;
+        macInput.style.borderColor = '#4cc9f0';
+        
+        alert('Successfully connected to Master device!\n\nMAC: ' + formattedMac + '\n\nESP-NOW pairing established.');
+        loadDeviceInfo();
+      } else {
+        // Show error status
+        const connectionStatus = document.getElementById('connectionStatus');
+        const connectionStatusText = document.getElementById('connectionStatusText');
+        connectionStatus.style.display = 'block';
+        connectionStatus.style.background = '#4a1a1a';
+        connectionStatus.style.borderLeft = '4px solid #ff6b6b';
+        connectionStatusText.innerHTML = '🔴 Connection failed: ' + (data.message || 'Unknown error');
+        connectionStatusText.style.color = '#ff6b6b';
+        
+        alert('Failed to connect to Master device: ' + (data.message || 'Unknown error'));
+      }
+    })
+    .catch(error => {
+      console.error('Error setting master MAC:', error);
+      
+      // Show network error status
+      const connectionStatus = document.getElementById('connectionStatus');
+      const connectionStatusText = document.getElementById('connectionStatusText');
+      connectionStatus.style.display = 'block';
+      connectionStatus.style.background = '#4a1a1a';
+      connectionStatus.style.borderLeft = '4px solid #ff6b6b';
+      connectionStatusText.innerHTML = '🔴 Network error - Please try again';
+      connectionStatusText.style.color = '#ff6b6b';
+      
+      alert('Failed to connect to Master device. Please check the MAC address and try again.');
+    });
+}
+
+// Copy MAC address to clipboard
+function copyMacAddress() {
+  const macElement = document.getElementById('deviceMac');
+  const mac = macElement.textContent;
+  
+  if (mac && mac !== 'Loading...') {
+    navigator.clipboard.writeText(mac).then(() => {
+      showSavedNotification();
+      // Temporarily change button text to show it was copied
+      const button = event.target;
+      const originalText = button.textContent;
+      button.textContent = 'Copied!';
+      button.style.background = '#4cc9f0';
+      setTimeout(() => {
+        button.textContent = originalText;
+        button.style.background = '#4361ee';
+      }, 1500);
+    }).catch(error => {
+      console.error('Failed to copy MAC address:', error);
+      // Fallback for older browsers
+      const textArea = document.createElement('textarea');
+      textArea.value = mac;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+      alert('MAC address copied to clipboard: ' + mac);
+    });
+  } else {
+    alert('MAC address not available yet');
+  }
 }
 
 // Update sensor priority mode
@@ -563,15 +706,65 @@ function loadDeviceInfo() {
   fetch('/getDeviceInfo')
     .then(r => r.json())
     .then(data => {
+      // Set device role dropdown
       document.getElementById('deviceRole').value = data.role;
-      document.getElementById('sensorPriorityMode').value = data.sensorPriorityMode || 0;
+      
+      // Set sensor priority mode if element exists
+      const sensorPriorityElement = document.getElementById('sensorPriorityMode');
+      if (sensorPriorityElement) {
+        sensorPriorityElement.value = data.sensorPriorityMode || 0;
+      }
+      
+      // Display device MAC address
+      const deviceMacElement = document.getElementById('deviceMac');
+      if (deviceMacElement && data.mac) {
+        deviceMacElement.textContent = data.mac;
+      }
+      
+      // Show/hide Master MAC input based on role
+      const masterMacSection = document.getElementById('masterMacSection');
+      const macDescription = document.getElementById('macDescription');
+      
+      if (data.role == 2) { // Slave role
+        masterMacSection.style.display = 'block';
+        macDescription.textContent = 'This device\'s MAC address - share with Master device for pairing';
+        
+        // Load existing master MAC if available and show connection status
+        const masterMacInput = document.getElementById('masterMacInput');
+        const connectionStatus = document.getElementById('connectionStatus');
+        const connectionStatusText = document.getElementById('connectionStatusText');
+        
+        if (data.masterMac && data.masterMac !== '00:00:00:00:00:00') {
+          masterMacInput.value = data.masterMac;
+          masterMacInput.style.borderColor = '#4cc9f0'; // Show connected state
+          
+          // Show connection status
+          connectionStatus.style.display = 'block';
+          connectionStatus.style.background = '#1a4a4a';
+          connectionStatus.style.borderLeft = '4px solid #4cc9f0';
+          connectionStatusText.innerHTML = '🟢 Connected to Master: ' + data.masterMac;
+          connectionStatusText.style.color = '#4cc9f0';
+        } else {
+          // Show not connected status
+          connectionStatus.style.display = 'block';
+          connectionStatus.style.background = '#4a1a1a';
+          connectionStatus.style.borderLeft = '4px solid #ff6b6b';
+          connectionStatusText.innerHTML = '🔴 Not connected to Master - Enter MAC address above';
+          connectionStatusText.style.color = '#ff6b6b';
+        }
+      } else { // Master role
+        masterMacSection.style.display = 'none';
+        macDescription.textContent = 'This device\'s MAC address for ESP-NOW pairing';
+      }
       
       // Show/hide real-time section based on role
       const realtimeSection = document.getElementById('realtimeSection');
-      if (data.role == 1) { // Master
-        realtimeSection.style.display = 'block';
-      } else {
-        realtimeSection.style.display = 'none';
+      if (realtimeSection) {
+        if (data.role == 1) { // Master
+          realtimeSection.style.display = 'block';
+        } else {
+          realtimeSection.style.display = 'none';
+        }
       }
     })
     .catch(error => console.error('Error loading device info:', error));
@@ -746,7 +939,7 @@ function updateDistanceTable(data) {
       }
     });
   } else {
-    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#666">No sensor data available</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#666;padding:20px;"><div style="font-size:16px;margin-bottom:8px;">⚪ No Active Sensors</div><div style="font-size:12px;">Pair devices below to see sensor data</div></td></tr>';
   }
 }
 

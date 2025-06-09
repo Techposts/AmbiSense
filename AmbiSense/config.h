@@ -2,7 +2,7 @@
 #define CONFIG_H
 
 /*
- * AmbiSense v4.3.0 - Enhanced Radar-Controlled LED System
+ * AmbiSense v5.1.1 - Enhanced Radar-Controlled LED System
  * Created by Ravi Singh (techPosts media)
  * Copyright © 2025 TechPosts Media. All rights reserved.
  */
