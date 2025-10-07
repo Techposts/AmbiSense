@@ -178,20 +178,26 @@ pre_flight_checks() {
     cecho "green" "✓ Sudo access confirmed"
 
     # Check for internet connection
-    cecho "yellow" "Checking internet connection (this may take 10-15 seconds)..."
+    cecho "yellow" "Checking internet connection..."
     local test_hosts=("8.8.8.8" "1.1.1.1" "github.com")
     local connection_ok=0
 
     for host in "${test_hosts[@]}"; do
-        # Pi Zero can have slow/high-latency network - use longer timeout
-        ping -c 2 -W 5 -i 0.5 "$host" >/dev/null 2>&1
-        if [ $? -eq 0 ]; then
+        # Use timeout command to prevent hanging
+        cecho "blue" "  Testing $host..."
+        timeout 8 ping -c 1 -W 5 "$host" >/dev/null 2>&1 || true
+        local result=$?
+        if [ $result -eq 0 ]; then
             connection_ok=1
             log "Internet check: Successfully pinged $host"
+            cecho "green" "  ✓ Connected"
             break
+        elif [ $result -eq 124 ]; then
+            log "Internet check: Timeout pinging $host"
+            cecho "yellow" "  ✗ Timeout"
         else
-            log "Internet check: Failed to ping $host"
-            sleep 1
+            log "Internet check: Failed to ping $host (exit $result)"
+            cecho "yellow" "  ✗ Failed"
         fi
     done
 
