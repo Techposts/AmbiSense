@@ -38,7 +38,7 @@ pre_flight_checks() {
     fi
 
     # Check for internet connection
-    if ! ping -c 1 -W 3 google.com &> /dev/null; then
+    if ! wget -q --spider http://google.com; then
         cecho "red" "Error: No internet connection detected. Please connect to the internet and try again."
         exit 1
     fi
