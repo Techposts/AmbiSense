@@ -701,19 +701,20 @@ main() {
     cat "$make_log" >> "$LOG_FILE" 2>/dev/null || true
 
     cecho "yellow" "Installing..."
-    if ! sudo make install 2>&1 | tee -a "$LOG_FILE"; then
-        cecho "red" "❌ Shairport-Sync installation failed"
-        exit 1
-    fi
+    # Note: make install may fail on systemd service install, but that's OK
+    # We'll create the service file manually later
+    sudo make install 2>&1 | tee -a "$LOG_FILE" || true
 
-    # Verify binary was installed
+    # What matters is that the binary was installed
     if ! command_exists shairport-sync; then
         cecho "red" "❌ Shairport-Sync binary not found after installation"
         cecho "yellow" "   Expected location: /usr/local/bin/shairport-sync"
+        cecho "yellow" "   The 'make install' may have failed - check the log"
         exit 1
     fi
 
     cecho "green" "✓ Shairport-Sync compiled and installed"
+    log "Note: make install may have shown errors about systemd service - this is normal"
     echo
 
     # --- Configure Shairport-Sync ---
@@ -785,8 +786,10 @@ EOF
     cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     cecho "blue" "   Setting Up Auto-Start Service..."
     cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log "Creating systemd service..."
+    log "Creating systemd service manually (make install sometimes fails at this step)..."
 
+    # Create systemd service file manually - this is more reliable than 'make install'
+    # which often fails on the systemd service installation step on Raspberry Pi
     sudo tee /lib/systemd/system/shairport-sync.service > /dev/null <<EOF
 [Unit]
 Description=Shairport Sync - AirPlay Audio Receiver
