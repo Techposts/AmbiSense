@@ -137,7 +137,7 @@ check_service() {
 # Validate package installation
 validate_package() {
     local package=$1
-    if dpkg -l | grep -q "^ii  $package"; then
+    if dpkg -l "$package" 2>/dev/null | grep -q "^ii"; then
         return 0
     else
         cecho "red" "✗ Package $package failed to install"
