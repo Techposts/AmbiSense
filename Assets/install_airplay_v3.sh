@@ -806,18 +806,12 @@ EOF
     sudo tee /lib/systemd/system/shairport-sync.service > /dev/null <<EOF
 [Unit]
 Description=Shairport Sync - AirPlay Audio Receiver
-After=sound.target network-online.target avahi-daemon.service
-Wants=network-online.target
-Requires=nqptp.service
-After=nqptp.service
+After=sound.target network-online.target
 
 [Service]
-Type=notify
 ExecStart=/usr/local/bin/shairport-sync
-User=shairport-sync
-Group=shairport-sync
 Restart=on-failure
-RestartSec=10
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
