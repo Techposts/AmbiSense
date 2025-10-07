@@ -764,48 +764,37 @@ alsa = {};
 FALLBACK_EOF
     fi
 
-    # Now edit the config file to set our values
+    # Now edit the config file to set our values using simple, reliable sed commands
     log "Configuring AirPlay name: $airplay_name"
 
-    # Set the AirPlay device name
-    sudo sed -i '/general =/,/^}/{ s|//[[:space:]]*name = .*|        name = "'"$airplay_name"'";|; /^[[:space:]]*name = /d; /general =/a\        name = "'"$airplay_name"'";
-}' /etc/shairport-sync.conf
+    # Set the AirPlay device name - uncomment and set it
+    sudo sed -i "s|^//[[:space:]]*name = .*|        name = \"$airplay_name\";|" /etc/shairport-sync.conf
 
-    # Set output device
+    # Set output device - uncomment and set it
     log "Configuring audio output: $audio_device_plug"
-    sudo sed -i '/alsa =/,/^}/{
-        s|//[[:space:]]*output_device = .*|        output_device = "'"$audio_device_plug"'";|
-        s|^[[:space:]]*output_device = .*|        output_device = "'"$audio_device_plug"'";|
-    }' /etc/shairport-sync.conf
+    sudo sed -i "s|^[[:space:]]*output_device = .*|        output_device = \"$audio_device_plug\";|" /etc/shairport-sync.conf
+    sudo sed -i "s|^//[[:space:]]*output_device = .*|        output_device = \"$audio_device_plug\";|" /etc/shairport-sync.conf
 
     # Set mixer control if available
     if [ -n "$mixer_control" ]; then
         log "Configuring mixer control: $mixer_control on hw:$card_number"
-        sudo sed -i '/alsa =/,/^}/{
-            s|//[[:space:]]*mixer_control_name = .*|        mixer_control_name = "'"$mixer_control"'";|
-            s|^[[:space:]]*mixer_control_name = .*|        mixer_control_name = "'"$mixer_control"'";|
-            s|//[[:space:]]*mixer_device = .*|        mixer_device = "hw:'"$card_number"'";|
-            s|^[[:space:]]*mixer_device = .*|        mixer_device = "hw:'"$card_number"'";|
-        }' /etc/shairport-sync.conf
+        sudo sed -i "s|^//[[:space:]]*mixer_control_name = .*|        mixer_control_name = \"$mixer_control\";|" /etc/shairport-sync.conf
+        sudo sed -i "s|^[[:space:]]*mixer_control_name = .*|        mixer_control_name = \"$mixer_control\";|" /etc/shairport-sync.conf
+        # Also set mixer_device if needed (usually commented out by default)
+        sudo sed -i "s|^//[[:space:]]*mixer_device = .*|        mixer_device = \"hw:$card_number\";|" /etc/shairport-sync.conf
+        sudo sed -i "s|^[[:space:]]*mixer_device = .*|        mixer_device = \"hw:$card_number\";|" /etc/shairport-sync.conf
     fi
 
     # Set output format
-    sudo sed -i '/alsa =/,/^}/{
-        s|//[[:space:]]*output_rate = .*|        output_rate = "auto";|
-        s|^[[:space:]]*output_rate = .*|        output_rate = "auto";|
-        s|//[[:space:]]*output_format = .*|        output_format = "S16";|
-        s|^[[:space:]]*output_format = .*|        output_format = "S16";|
-    }' /etc/shairport-sync.conf
+    sudo sed -i "s|^//[[:space:]]*output_rate = .*|        output_rate = \"auto\";|" /etc/shairport-sync.conf
+    sudo sed -i "s|^[[:space:]]*output_rate = .*|        output_rate = \"auto\";|" /etc/shairport-sync.conf
+    sudo sed -i "s|^//[[:space:]]*output_format = .*|        output_format = \"S16\";|" /etc/shairport-sync.conf
+    sudo sed -i "s|^[[:space:]]*output_format = .*|        output_format = \"S16\";|" /etc/shairport-sync.conf
 
     # Set volume settings
-    sudo sed -i '/general =/,/^}/{
-        s|//[[:space:]]*volume_max_db = .*|        volume_max_db = 4.0;|
-        s|^[[:space:]]*volume_max_db = .*|        volume_max_db = 4.0;|
-        s|//[[:space:]]*default_airplay_volume = .*|        default_airplay_volume = -6.0;|
-        s|^[[:space:]]*default_airplay_volume = .*|        default_airplay_volume = -6.0;|
-        s|//[[:space:]]*high_volume_idle_timeout_in_minutes = .*|        high_volume_idle_timeout_in_minutes = 1;|
-        s|^[[:space:]]*high_volume_idle_timeout_in_minutes = .*|        high_volume_idle_timeout_in_minutes = 1;|
-    }' /etc/shairport-sync.conf
+    sudo sed -i "s|^//[[:space:]]*volume_max_db = .*|        volume_max_db = 4.0;|" /etc/shairport-sync.conf
+    sudo sed -i "s|^//[[:space:]]*default_airplay_volume = .*|        default_airplay_volume = -6.0;|" /etc/shairport-sync.conf
+    sudo sed -i "s|^//[[:space:]]*high_volume_idle_timeout_in_minutes = .*|        high_volume_idle_timeout_in_minutes = 1;|" /etc/shairport-sync.conf
 
     # Verify config file was created
     if [ ! -f /etc/shairport-sync.conf ]; then
