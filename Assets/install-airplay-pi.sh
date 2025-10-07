@@ -1,18 +1,16 @@
 #!/bin/bash
 
 # ===================================================================================
-# Shairport-Sync AirPlay 2 ROBUST Installer
+# Shairport-Sync AirPlay 2 ROBUST Installer - ENHANCED VERSION
 #
-# Tailored for: Raspberry Pi (Zero/3/4/5) with one or more USB DACs
-# Version: 2.0
-# Features: Interactive setup, device auto-detection, user choices, error checking.
+# Tailored for: Raspberry Pi (Zero/3/4/5) with USB DAC
+# Version: 2.1 Enhanced
+# Features: Better error handling, audio testing, mixer detection, validation
 # ===================================================================================
 
-# --- Configuration ---
-# Exit immediately if a command exits with a non-zero status.
-set -e
+set -e  # Exit on error
 
-# --- Helper Functions for User Interface ---
+# --- Helper Functions ---
 cecho() {
     local code="\033["
     case "$1" in
@@ -20,215 +18,492 @@ cecho() {
         "green")  color="${code}1;32m" ;;
         "yellow") color="${code}1;33m" ;;
         "blue")   color="${code}1;34m" ;;
-        *)        color="${code}0m" ;; # Default
+        "magenta") color="${code}1;35m" ;;
+        *)        color="${code}0m" ;;
     esac
-    local message="$2"
-    local reset="${code}0m"
-    echo -e "${color}${message}${reset}"
+    echo -e "${color}$2\033[0m"
+}
+
+# Show spinner during long operations
+show_spinner() {
+    local pid=$1
+    local delay=0.1
+    local spinstr='|/-\'
+    while [ "$(ps a | awk '{print $1}' | grep $pid)" ]; do
+        local temp=${spinstr#?}
+        printf " [%c]  " "$spinstr"
+        local spinstr=$temp${spinstr%"$temp"}
+        sleep $delay
+        printf "\b\b\b\b\b\b"
+    done
+    printf "    \b\b\b\b"
+}
+
+# Check if a service is running properly
+check_service() {
+    local service_name=$1
+    if systemctl is-active --quiet "$service_name"; then
+        cecho "green" "✓ $service_name is running"
+        return 0
+    else
+        cecho "red" "✗ $service_name failed to start"
+        cecho "yellow" "Debug info:"
+        sudo systemctl status "$service_name" --no-pager -l
+        return 1
+    fi
 }
 
 # --- Pre-flight Checks ---
 pre_flight_checks() {
-    cecho "blue" "Running pre-flight checks..."
+    cecho "blue" "═══════════════════════════════════════"
+    cecho "blue" "   Running Pre-Flight Checks..."
+    cecho "blue" "═══════════════════════════════════════"
+    echo
 
     # Check for root user
     if [ "$EUID" -eq 0 ]; then
-        cecho "red" "Error: This script should not be run as root. Please run it as a normal user."
+        cecho "red" "❌ Error: Don't run this script with sudo or as root."
+        cecho "yellow" "   Just run: ./install_airplay.sh"
         exit 1
     fi
 
     # Check for internet connection
-    if ! wget -q --spider http://google.com; then
-        cecho "red" "Error: No internet connection detected. Please connect to the internet and try again."
+    cecho "yellow" "Checking internet connection..."
+    if ! ping -c 1 -W 2 8.8.8.8 &> /dev/null; then
+        cecho "red" "❌ No internet connection detected."
+        cecho "yellow" "   Please connect to Wi-Fi and try again."
         exit 1
     fi
-    cecho "green" "Checks passed."
+    cecho "green" "✓ Internet connection OK"
+
+    # Check if running on Raspberry Pi
+    if [ ! -f /proc/device-tree/model ]; then
+        cecho "yellow" "⚠ Warning: This doesn't appear to be a Raspberry Pi."
+        read -p "Continue anyway? (y/N): " continue_choice
+        [[ ! "$continue_choice" =~ ^[Yy]$ ]] && exit 1
+    else
+        local pi_model=$(cat /proc/device-tree/model)
+        cecho "green" "✓ Detected: $pi_model"
+    fi
+
+    # Check available disk space (need at least 500MB)
+    local available_space=$(df / | tail -1 | awk '{print $4}')
+    if [ "$available_space" -lt 500000 ]; then
+        cecho "red" "❌ Not enough disk space. Need at least 500MB free."
+        exit 1
+    fi
+    cecho "green" "✓ Sufficient disk space available"
+    echo
 }
 
-# --- Main Script ---
-clear
-cecho "green" "======================================================"
-cecho "green" "      Welcome to the Robust AirPlay 2 Installer       "
-cecho "green" "======================================================"
-echo
-cecho "blue" "This script will guide you through setting up your"
-cecho "blue" "Raspberry Pi as a high-quality AirPlay 2 receiver."
-echo
+# --- Detect and Select USB DAC ---
+select_audio_device() {
+    cecho "yellow" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    cecho "yellow" "   Step 1: Audio Device Selection"
+    cecho "yellow" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo
 
-# Run pre-flight checks first
-pre_flight_checks
-echo
-
-# --- STEP 1: GATHER USER INPUT ---
-
-# Get AirPlay Device Name
-cecho "yellow" "1. Let's name your AirPlay device."
-read -p "Enter the name for your speaker (e.g., Living Room): " airplay_name
-if [ -z "$airplay_name" ]; then
-    airplay_name="Raspberry Pi AirPlay"
-fi
-cecho "green" "AirPlay name will be: '$airplay_name'"
-echo
-
-# Detect and Select USB DAC
-cecho "yellow" "2. Detecting external audio devices..."
-# Find all audio cards that are NOT the internal one (bcm2835)
-mapfile -t devices < <(aplay -l | grep -i 'card [0-9]:' | grep -iv 'bcm2835')
-
-if [ ${#devices[@]} -eq 0 ]; then
-    cecho "red" "ERROR: No external USB DAC detected!"
-    cecho "red" "Please make sure your USB DAC is connected and recognized, then re-run the script."
-    exit 1
-elif [ ${#devices[@]} -eq 1 ]; then
-    cecho "green" "Found one external audio device, auto-selecting it:"
-    echo " -> ${devices[0]}"
-    selected_index=0
-else
-    cecho "yellow" "Found multiple external audio devices. Please choose one:"
-    for i in "${!devices[@]}"; do
-        echo "  [$i] ${devices[$i]}"
-    done
-    read -p "Enter the number of the device you want to use: " device_choice
-    # Validate input
-    if ! [[ "$device_choice" =~ ^[0-9]+$ ]] || [ "$device_choice" -ge "${#devices[@]}" ]; then
-        cecho "red" "Invalid selection. Exiting."
+    # Get list of all audio cards
+    cecho "blue" "Scanning for audio devices..."
+    local all_cards=$(aplay -l 2>/dev/null | grep '^card' || true)
+    
+    if [ -z "$all_cards" ]; then
+        cecho "red" "❌ No audio devices detected at all!"
+        cecho "yellow" "   Make sure your USB DAC is properly connected."
         exit 1
     fi
-    selected_index=$device_choice
-fi
 
-# Extract card number from the chosen device
-card_number=$(echo "${devices[$selected_index]}" | awk '{print $2}' | sed 's/://')
-device_string="plughw:$card_number,0"
-cecho "green" "Audio output will be set to: '$device_string'"
+    # Show all detected devices
+    cecho "green" "Found these audio devices:"
+    echo "$all_cards" | nl -w2 -s'. '
+    echo
+
+    # Filter out built-in audio (bcm2835, Headphones)
+    mapfile -t external_devices < <(echo "$all_cards" | grep -iv 'bcm2835\|Headphones' || true)
+    
+    if [ ${#external_devices[@]} -eq 0 ]; then
+        cecho "red" "❌ No external USB DAC detected!"
+        cecho "yellow" "   I can only see the Pi's built-in audio."
+        cecho "yellow" "   Please:"
+        cecho "yellow" "   1. Connect your USB DAC"
+        cecho "yellow" "   2. Wait 5 seconds"
+        cecho "yellow" "   3. Run this script again"
+        exit 1
+    fi
+
+    # Auto-select if only one external device
+    if [ ${#external_devices[@]} -eq 1 ]; then
+        cecho "green" "✓ Found one USB DAC, auto-selecting:"
+        cecho "magenta" "  → ${external_devices[0]}"
+        selected_device="${external_devices[0]}"
+    else
+        # Multiple devices - let user choose
+        cecho "yellow" "Found ${#external_devices[@]} external audio devices:"
+        for i in "${!external_devices[@]}"; do
+            echo "  [$i] ${external_devices[$i]}"
+        done
+        echo
+        read -p "Enter the number [0-$((${#external_devices[@]}-1))]: " device_choice
+        
+        # Validate input
+        if ! [[ "$device_choice" =~ ^[0-9]+$ ]] || [ "$device_choice" -ge "${#external_devices[@]}" ]; then
+            cecho "red" "❌ Invalid selection."
+            exit 1
+        fi
+        selected_device="${external_devices[$device_choice]}"
+    fi
+
+    # Extract card and device numbers more reliably
+    card_number=$(echo "$selected_device" | grep -oP 'card \K\d+' || echo "")
+    device_number=$(echo "$selected_device" | grep -oP 'device \K\d+' || echo "0")
+    
+    if [ -z "$card_number" ]; then
+        cecho "red" "❌ Failed to extract card number from: $selected_device"
+        exit 1
+    fi
+
+    audio_device="hw:$card_number,$device_number"
+    audio_device_plug="plughw:$card_number,$device_number"
+    
+    cecho "green" "✓ Audio device set to: $audio_device_plug"
+    
+    # Detect available mixer controls for this card
+    cecho "blue" "Detecting volume controls..."
+    mapfile -t mixers < <(amixer -c "$card_number" scontrols 2>/dev/null | grep -oP "Simple mixer control '\K[^']+" || echo "")
+    
+    if [ ${#mixers[@]} -eq 0 ]; then
+        cecho "yellow" "⚠ No mixer controls found. Volume control will be disabled."
+        mixer_control=""
+    else
+        # Try to find the best mixer control
+        for preferred in "PCM" "Master" "Speaker" "Headphone"; do
+            for mixer in "${mixers[@]}"; do
+                if [[ "$mixer" == "$preferred" ]]; then
+                    mixer_control="$mixer"
+                    break 2
+                fi
+            done
+        done
+        
+        # If no preferred mixer found, use the first one
+        if [ -z "$mixer_control" ]; then
+            mixer_control="${mixers[0]}"
+        fi
+        
+        cecho "green" "✓ Volume control: $mixer_control"
+    fi
+    echo
+}
+
+# --- Get AirPlay Name ---
+get_airplay_name() {
+    cecho "yellow" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    cecho "yellow" "   Step 2: Name Your AirPlay Device"
+    cecho "yellow" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo
+    
+    local hostname=$(hostname)
+    cecho "blue" "This is the name that will appear on your iPhone/iPad."
+    cecho "blue" "Examples: Living Room, Bedroom Speaker, Kitchen Audio"
+    echo
+    read -p "Enter a name (or press Enter for '$hostname AirPlay'): " airplay_name
+    
+    if [ -z "$airplay_name" ]; then
+        airplay_name="$hostname AirPlay"
+    fi
+    
+    cecho "green" "✓ AirPlay name: '$airplay_name'"
+    echo
+}
+
+# --- Wi-Fi Power Management ---
+configure_wifi() {
+    cecho "yellow" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    cecho "yellow" "   Step 3: Wi-Fi Optimization"
+    cecho "yellow" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo
+    
+    cecho "blue" "Wi-Fi power saving can cause audio stuttering and dropouts."
+    cecho "blue" "Disabling it ensures smooth, uninterrupted playback."
+    echo
+    read -p "Disable Wi-Fi power saving? (Y/n): " wifi_choice
+    
+    if [[ -z "$wifi_choice" || "$wifi_choice" =~ ^[Yy]$ ]]; then
+        disable_wifi_pm=true
+        cecho "green" "✓ Wi-Fi power management will be disabled"
+    else
+        disable_wifi_pm=false
+        cecho "yellow" "⚠ Keeping default Wi-Fi settings (may cause dropouts)"
+    fi
+    echo
+}
+
+# --- Main Installation ---
+clear
+cecho "green" "╔═════════════════════════════════════════════════════╗"
+cecho "green" "║                                                     ║"
+cecho "green" "║     AirPlay 2 Installer for Raspberry Pi + DAC     ║"
+cecho "green" "║                  Version 2.1                        ║"
+cecho "green" "║                                                     ║"
+cecho "green" "╚═════════════════════════════════════════════════════╝"
+echo
+cecho "blue" "This installer will turn your Raspberry Pi into a"
+cecho "blue" "high-quality AirPlay 2 receiver. Just follow the prompts!"
+echo
+read -p "Press Enter to begin..."
 echo
 
-# Ask about Wi-Fi Power Management
-cecho "yellow" "3. Disable Wi-Fi Power Management?"
-cecho "blue" "(This is highly recommended to prevent audio dropouts and stuttering)"
-read -p "Disable this feature for maximum stability? (Y/n): " wifi_choice
-# Default to Yes if user presses Enter or types 'y' or 'Y'
-if [[ -z "$wifi_choice" || "$wifi_choice" =~ ^[Yy]$ ]]; then
-    disable_wifi_power_management=true
-    cecho "green" "Wi-Fi Power Management will be disabled."
-else
-    disable_wifi_power_management=false
-    cecho "green" "Wi-Fi Power Management will be left at its default state."
-fi
+# Run all setup steps
+pre_flight_checks
+select_audio_device
+get_airplay_name
+configure_wifi
+
+# --- Confirmation ---
+cecho "magenta" "╔═════════════════════════════════════════════════════╗"
+cecho "magenta" "║           INSTALLATION CONFIGURATION                ║"
+cecho "magenta" "╚═════════════════════════════════════════════════════╝"
+echo
+cecho "yellow" "  📱 AirPlay Name:        $airplay_name"
+cecho "yellow" "  🔊 Audio Output:        $audio_device_plug"
+cecho "yellow" "  🎚️  Volume Control:      ${mixer_control:-None (fixed volume)}"
+cecho "yellow" "  📡 Disable Wi-Fi PM:    $disable_wifi_pm"
+echo
+cecho "blue" "Installation will take 10-20 minutes depending on your Pi model."
+cecho "blue" "(Pi Zero will be slower, Pi 4/5 will be faster)"
+echo
+read -p "Press Enter to start installation, or Ctrl+C to cancel..."
 echo
 
-# --- STEP 2: CONFIRMATION ---
-cecho "yellow" "--- CONFIGURATION SUMMARY ---"
-cecho "yellow" "  - AirPlay Name: $airplay_name"
-cecho "yellow" "  - Audio Output: $device_string"
-cecho "yellow" "  - Disable Wi-Fi Power Management: $disable_wifi_power_management"
-cecho "yellow" "-----------------------------"
+# --- System Update ---
+cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+cecho "blue" "   Updating System Packages..."
+cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+sudo apt-get update -qq
+sudo apt-get upgrade -y -qq
+cecho "green" "✓ System updated"
 echo
-read -p "Press Enter to begin the installation, or Ctrl+C to cancel."
 
-# --- STEP 3: INSTALLATION ---
-cecho "blue" "\nUpdating system and installing dependencies. This may take a few minutes..."
-sudo apt-get update && sudo apt-get -y upgrade
-sudo apt-get install -y build-essential git autoconf automake libtool libpopt-dev libconfig-dev libasound2-dev avahi-daemon libavahi-client-dev libssl-dev libsoxr-dev libplist-dev libsodium-dev libavutil-dev libavcodec-dev libavformat-dev uuid-dev libgcrypt-dev xxd
+# --- Install Dependencies ---
+cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+cecho "blue" "   Installing Dependencies..."
+cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+sudo apt-get install -y -qq \
+    build-essential git autoconf automake libtool \
+    libpopt-dev libconfig-dev libasound2-dev \
+    avahi-daemon libavahi-client-dev libssl-dev \
+    libsoxr-dev libplist-dev libsodium-dev \
+    libavutil-dev libavcodec-dev libavformat-dev \
+    uuid-dev libgcrypt-dev xxd alsa-utils
+cecho "green" "✓ Dependencies installed"
+echo
 
-cecho "blue" "\nInstalling NQPTP (AirPlay 2 Clock)..."
+# --- Install NQPTP ---
+cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+cecho "blue" "   Installing NQPTP (Timing System)..."
+cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 cd /tmp
-git clone https://github.com/mikebrady/nqptp.git
+rm -rf nqptp 2>/dev/null || true
+git clone -q https://github.com/mikebrady/nqptp.git
 cd nqptp
-autoreconf -fi
-./configure --with-systemd-startup
-make && sudo make install
-sudo systemctl enable nqptp && sudo systemctl start nqptp
-cecho "green" "NQPTP installed successfully."
+autoreconf -fi > /dev/null 2>&1
+./configure --with-systemd-startup > /dev/null 2>&1
+make -j$(nproc) > /dev/null 2>&1
+sudo make install > /dev/null 2>&1
+sudo systemctl enable nqptp > /dev/null 2>&1
+sudo systemctl start nqptp
+sleep 2
+check_service "nqptp" || exit 1
+echo
 
-cecho "blue" "\nInstalling Shairport-Sync (AirPlay Receiver)..."
-cecho "yellow" "This next step (compiling) is slow, especially on a Pi Zero (10-15 mins)."
+# --- Install Shairport-Sync ---
+cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+cecho "blue" "   Installing Shairport-Sync..."
+cecho "blue" "   (This takes 10-15 mins on Pi Zero)"
+cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 cd /tmp
-git clone https://github.com/mikebrady/shairport-sync.git
+rm -rf shairport-sync 2>/dev/null || true
+git clone -q https://github.com/mikebrady/shairport-sync.git
 cd shairport-sync
-autoreconf -fi
-./configure --sysconfdir=/etc --with-alsa --with-avahi --with-ssl=openssl --with-soxr --with-systemd --with-airplay-2
-make && sudo make install
-cecho "green" "Shairport-Sync installed successfully."
+autoreconf -fi > /dev/null 2>&1
+./configure --sysconfdir=/etc --with-alsa --with-avahi \
+    --with-ssl=openssl --with-soxr --with-systemd \
+    --with-airplay-2 > /dev/null 2>&1
 
-# --- STEP 4: CONFIGURATION & SERVICES ---
-cecho "blue" "\nApplying your custom configuration..."
-# Create a backup
-[ -f /etc/shairport-sync.conf ] && sudo mv /etc/shairport-sync.conf /etc/shairport-sync.conf.bak
-# Create new config file with user-defined values
+cecho "yellow" "Compiling (be patient)..."
+make -j$(nproc) > /dev/null 2>&1 &
+make_pid=$!
+show_spinner $make_pid
+wait $make_pid
+
+sudo make install > /dev/null 2>&1
+cecho "green" "✓ Shairport-Sync compiled and installed"
+echo
+
+# --- Configure Shairport-Sync ---
+cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+cecho "blue" "   Configuring Shairport-Sync..."
+cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Backup existing config
+[ -f /etc/shairport-sync.conf ] && sudo cp /etc/shairport-sync.conf /etc/shairport-sync.conf.backup
+
+# Create optimized config
 sudo tee /etc/shairport-sync.conf > /dev/null <<EOF
-// Shairport-Sync configuration file, generated by robust install script
+// Generated by AirPlay 2 Installer v2.1
 general = {
   name = "$airplay_name";
-  interpolation = "soxr"; // Use high-quality interpolation
+  interpolation = "soxr";
+  output_backend = "alsa";
   volume_max_db = 3.0;
   default_airplay_volume = -6.0;
   high_volume_idle_timeout_in_minutes = 1;
 };
+
 alsa = {
-  output_device = "$device_string";
-  mixer_control_name = "PCM";
+  output_device = "$audio_device_plug";
+EOF
+
+# Only add mixer control if one was detected
+if [ -n "$mixer_control" ]; then
+    sudo tee -a /etc/shairport-sync.conf > /dev/null <<EOF
+  mixer_control_name = "$mixer_control";
+EOF
+fi
+
+sudo tee -a /etc/shairport-sync.conf > /dev/null <<EOF
+  output_rate = 44100;
+  output_format = "S16";
 };
 EOF
-cecho "green" "Shairport-Sync configuration applied."
 
-cecho "blue" "\nCreating and enabling the system service..."
+cecho "green" "✓ Configuration file created"
+
+# Set mixer volume to maximum if available
+if [ -n "$mixer_control" ]; then
+    amixer -c "$card_number" set "$mixer_control" 100% > /dev/null 2>&1 || true
+    sudo alsactl store > /dev/null 2>&1 || true
+    cecho "green" "✓ Mixer volume set to maximum"
+fi
+echo
+
+# --- Create Systemd Service ---
+cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+cecho "blue" "   Setting Up Auto-Start Service..."
+cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
 sudo tee /lib/systemd/system/shairport-sync.service > /dev/null <<EOF
 [Unit]
 Description=Shairport Sync - AirPlay Audio Receiver
-After=sound.target network-online.target
+After=sound.target network-online.target avahi-daemon.service
+Wants=network-online.target
 Requires=nqptp.service
 After=nqptp.service
+
 [Service]
+Type=notify
 ExecStart=/usr/local/bin/shairport-sync
 Restart=on-failure
 RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
 [Install]
 WantedBy=multi-user.target
 EOF
 
 sudo systemctl daemon-reload
-sudo systemctl enable shairport-sync
-sudo systemctl start shairport-sync
-cecho "green" "Shairport-Sync service is now active."
+sudo systemctl enable shairport-sync > /dev/null 2>&1
+sudo systemctl restart shairport-sync
+sleep 3
+check_service "shairport-sync" || exit 1
+echo
 
-# Disable Wi-Fi Power Management if user chose to
-if [ "$disable_wifi_power_management" = true ]; then
-    cecho "blue" "\nDisabling Wi-Fi Power Management..."
+# --- Configure Wi-Fi Power Management ---
+if [ "$disable_wifi_pm" = true ]; then
+    cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    cecho "blue" "   Disabling Wi-Fi Power Saving..."
+    cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
     sudo tee /etc/rc.local > /dev/null <<EOF
 #!/bin/bash
-/sbin/iw dev wlan0 set power_save off
+# Disable Wi-Fi power management for stable audio streaming
+/sbin/iw dev wlan0 set power_save off 2>/dev/null || true
 exit 0
 EOF
+    
     sudo chmod +x /etc/rc.local
+    
     sudo tee /etc/systemd/system/rc-local.service > /dev/null <<EOF
 [Unit]
 Description=/etc/rc.local Compatibility
 ConditionFileIsExecutable=/etc/rc.local
 After=network.target
+
 [Service]
 Type=forking
 ExecStart=/etc/rc.local start
 TimeoutSec=0
+RemainAfterExit=yes
+SysVStartPriority=99
+
 [Install]
 WantedBy=multi-user.target
 EOF
-    sudo systemctl enable rc-local.service
-    cecho "green" "Wi-Fi Power Management disabled."
+    
+    sudo systemctl daemon-reload
+    sudo systemctl enable rc-local.service > /dev/null 2>&1
+    
+    # Apply immediately
+    sudo /sbin/iw dev wlan0 set power_save off 2>/dev/null || true
+    cecho "green" "✓ Wi-Fi power management disabled"
+    echo
 fi
 
-# --- STEP 5: CLEANUP & FINISH ---
-cecho "blue" "\nCleaning up installation files..."
-rm -rf /tmp/nqptp
-rm -rf /tmp/shairport-sync
-cecho "green" "Cleanup complete."
+# --- Audio Test ---
+cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+cecho "blue" "   Testing Audio Output..."
+cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo
+cecho "yellow" "Playing test sound in 2 seconds..."
+sleep 2
 
-cecho "green" "\n======================================================"
-cecho "green" "            ✅ INSTALLATION COMPLETE! ✅            "
-cecho "green" "======================================================"
-cecho "blue" "\nYour Raspberry Pi is now an AirPlay 2 receiver named:"
-cecho "yellow" "\n  -->  $airplay_name  <--\n"
-cecho "blue" "It should appear on your Apple devices shortly."
-cecho "blue" "A reboot is recommended to ensure all changes are applied correctly."
-read -p "Press Enter to reboot now, or Ctrl+C to reboot later."
+if speaker-test -D "$audio_device_plug" -c 2 -t wav -l 1 > /dev/null 2>&1; then
+    cecho "green" "✓ Audio test successful!"
+else
+    cecho "yellow" "⚠ Audio test couldn't run, but setup is complete."
+fi
+echo
+
+# --- Cleanup ---
+cecho "blue" "Cleaning up temporary files..."
+rm -rf /tmp/nqptp /tmp/shairport-sync
+cecho "green" "✓ Cleanup complete"
+echo
+
+# --- Success Message ---
+cecho "green" "╔═════════════════════════════════════════════════════╗"
+cecho "green" "║                                                     ║"
+cecho "green" "║            ✅ INSTALLATION COMPLETE! ✅            ║"
+cecho "green" "║                                                     ║"
+cecho "green" "╚═════════════════════════════════════════════════════╝"
+echo
+cecho "magenta" "🎵 Your AirPlay 2 device is ready!"
+echo
+cecho "yellow" "  📱 Device Name:  $airplay_name"
+cecho "yellow" "  🔊 Audio Output: $audio_device_plug"
+echo
+cecho "blue" "How to use:"
+cecho "blue" "  1. Open Music, Spotify, or any audio app on your iPhone/iPad"
+cecho "blue" "  2. Tap the AirPlay icon (📡)"
+cecho "blue" "  3. Select '$airplay_name'"
+cecho "blue" "  4. Enjoy high-quality wireless audio!"
+echo
+cecho "yellow" "💡 Tip: Your device should appear within 30 seconds."
+cecho "yellow" "    If not, make sure your phone and Pi are on the same Wi-Fi network."
+echo
+cecho "blue" "To view logs: sudo journalctl -u shairport-sync -f"
+cecho "blue" "To restart:   sudo systemctl restart shairport-sync"
+echo
+read -p "Press Enter to reboot now (recommended), or Ctrl+C to reboot later..."
 sudo reboot
