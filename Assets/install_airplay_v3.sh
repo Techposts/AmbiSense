@@ -825,65 +825,29 @@ EOF
     fi
     echo
 
-    # --- Configure Wi-Fi Power Management ---
+    # --- Wi-Fi Power Management Instructions ---
     if [ "$disable_wifi_pm" = true ]; then
         cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        cecho "blue" "   Disabling Wi-Fi Power Saving..."
+        cecho "blue" "   Wi-Fi Power Management"
         cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        log "Configuring Wi-Fi power management..."
+        log "User requested Wi-Fi power management disable"
 
-        # Modern method using NetworkManager if available
-        if command_exists nmcli; then
-            cecho "blue" "Using NetworkManager to disable Wi-Fi power save..."
-            sudo nmcli connection modify "$(nmcli -t -f NAME connection show --active | head -1)" \
-                802-11-wireless.powersave 2 2>/dev/null || true
-        fi
-
-        # Fallback method using rc.local
-        sudo tee /etc/rc.local > /dev/null <<'EOF'
-#!/bin/bash
-# Disable Wi-Fi power management for stable audio streaming
-for iface in /sys/class/net/wlan*; do
-    [ -e "$iface" ] || continue
-    ifname=$(basename "$iface")
-    /sbin/iw dev "$ifname" set power_save off 2>/dev/null || true
-done
-exit 0
-EOF
-
-        sudo chmod +x /etc/rc.local
-
-        # Create rc-local service if it doesn't exist
-        if [ ! -f /etc/systemd/system/rc-local.service ]; then
-            sudo tee /etc/systemd/system/rc-local.service > /dev/null <<'EOF'
-[Unit]
-Description=/etc/rc.local Compatibility
-ConditionFileIsExecutable=/etc/rc.local
-After=network.target
-
-[Service]
-Type=forking
-ExecStart=/etc/rc.local start
-TimeoutSec=0
-RemainAfterExit=yes
-GuessMainPID=no
-
-[Install]
-WantedBy=multi-user.target
-EOF
-        fi
-
-        sudo systemctl daemon-reload
-        sudo systemctl enable rc-local.service 2>&1 | tee -a "$LOG_FILE"
-
-        # Apply immediately
-        for iface in /sys/class/net/wlan*; do
-            [ -e "$iface" ] || continue
-            ifname=$(basename "$iface")
-            sudo /sbin/iw dev "$ifname" set power_save off 2>/dev/null || true
-        done
-
-        cecho "green" "✓ Wi-Fi power management disabled"
+        cecho "yellow" "📝 Manual Wi-Fi Power Management Configuration Needed:"
+        echo
+        cecho "blue" "After installation completes, disable Wi-Fi power saving to prevent"
+        cecho "blue" "audio dropouts. You have two options:"
+        echo
+        cecho "green" "Option 1: Using raspi-config (Recommended)"
+        cecho "blue" "  1. Run: sudo raspi-config"
+        cecho "blue" "  2. Go to: Performance Options → Wireless LAN → Power Management"
+        cecho "blue" "  3. Select: Disable"
+        echo
+        cecho "green" "Option 2: Manual command"
+        cecho "blue" "  Run: sudo iw dev wlan0 set power_save off"
+        cecho "blue" "  (Note: This is temporary, resets on reboot)"
+        echo
+        cecho "yellow" "⚠ We're not doing this automatically to avoid disconnecting your SSH session"
+        log "Wi-Fi power management instructions provided to user"
         echo
     fi
 
@@ -970,6 +934,12 @@ EOF
     cecho "yellow" "   • Device should appear within 30 seconds after reboot"
     cecho "yellow" "   • Make sure iPhone and Pi are on the same Wi-Fi network"
     cecho "yellow" "   • For best quality, use lossless audio sources"
+    if [ "$disable_wifi_pm" = true ]; then
+        echo
+        cecho "yellow" "📝 IMPORTANT - After reboot:"
+        cecho "yellow" "   Don't forget to disable Wi-Fi power management using raspi-config!"
+        cecho "yellow" "   This prevents audio dropouts and stuttering."
+    fi
     echo
     cecho "blue" "📋 Useful commands:"
     cecho "blue" "   View live logs:    sudo journalctl -u shairport-sync -f"
