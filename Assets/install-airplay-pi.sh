@@ -82,7 +82,7 @@ pre_flight_checks() {
         read -p "Continue anyway? (y/N): " continue_choice
         [[ ! "$continue_choice" =~ ^[Yy]$ ]] && exit 1
     else
-        local pi_model=$(cat /proc/device-tree/model)
+        local pi_model=$(tr -d '\0' < /proc/device-tree/model)
         cecho "green" "✓ Detected: $pi_model"
     fi
 
