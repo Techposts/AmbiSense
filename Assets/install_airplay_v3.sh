@@ -786,6 +786,19 @@ EOF
     cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     cecho "blue" "   Setting Up Auto-Start Service..."
     cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log "Creating shairport-sync user and group..."
+
+    # Create user and group for shairport-sync service
+    if ! getent group shairport-sync >/dev/null 2>&1; then
+        sudo groupadd -r shairport-sync
+        log "Created shairport-sync group"
+    fi
+
+    if ! getent passwd shairport-sync >/dev/null 2>&1; then
+        sudo useradd -r -M -g shairport-sync -s /usr/sbin/nologin -G audio shairport-sync
+        log "Created shairport-sync user"
+    fi
+
     log "Creating systemd service manually (make install sometimes fails at this step)..."
 
     # Create systemd service file manually - this is more reliable than 'make install'
@@ -801,17 +814,10 @@ After=nqptp.service
 [Service]
 Type=notify
 ExecStart=/usr/local/bin/shairport-sync
+User=shairport-sync
+Group=shairport-sync
 Restart=on-failure
 RestartSec=10
-StandardOutput=journal
-StandardError=journal
-
-# Security settings
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/run/shairport-sync
 
 [Install]
 WantedBy=multi-user.target
