@@ -15,7 +15,7 @@
 #   - Latest package versions
 # ===================================================================================
 
-set -euo pipefail  # Exit on error, undefined variables, and pipe failures
+set -eo pipefail   # Exit on error and pipe failures
 IFS=$'\n\t'        # Safer word splitting
 
 # --- Global Variables ---
@@ -65,6 +65,8 @@ trap cleanup EXIT ERR INT TERM
 
 # --- Logging Function ---
 log() {
+    # Create log file if it doesn't exist
+    touch "$LOG_FILE" 2>/dev/null || true
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
 }
 
@@ -118,9 +120,17 @@ check_service() {
     done
 
     cecho "red" "✗ $service_name failed to start after $max_retries attempts"
-    cecho "yellow" "Debug info:"
-    sudo systemctl status "$service_name" --no-pager -l | tee -a "$LOG_FILE"
-    sudo journalctl -u "$service_name" -n 50 --no-pager | tee -a "$LOG_FILE"
+    cecho "yellow" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    cecho "yellow" "   Diagnostic Information:"
+    cecho "yellow" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo
+    echo "Service Status:" | tee -a "$LOG_FILE"
+    sudo systemctl status "$service_name" --no-pager -l 2>&1 | tee -a "$LOG_FILE"
+    echo
+    echo "Recent Logs:" | tee -a "$LOG_FILE"
+    sudo journalctl -u "$service_name" -n 30 --no-pager 2>&1 | tee -a "$LOG_FILE"
+    echo
+    cecho "yellow" "Check the log file for more details: $LOG_FILE"
     return 1
 }
 
@@ -168,28 +178,48 @@ pre_flight_checks() {
     cecho "green" "✓ Sudo access confirmed"
 
     # Check for internet connection
-    cecho "yellow" "Checking internet connection..."
-    local test_hosts=("8.8.8.8" "1.1.1.1")
+    cecho "yellow" "Checking internet connection (this may take 10-15 seconds)..."
+    local test_hosts=("8.8.8.8" "1.1.1.1" "github.com")
     local connection_ok=0
 
     for host in "${test_hosts[@]}"; do
-        if ping -c 1 -W 2 "$host" &> /dev/null; then
+        # Pi Zero can have slow/high-latency network - use longer timeout
+        ping -c 2 -W 5 -i 0.5 "$host" >/dev/null 2>&1
+        if [ $? -eq 0 ]; then
             connection_ok=1
+            log "Internet check: Successfully pinged $host"
             break
+        else
+            log "Internet check: Failed to ping $host"
+            sleep 1
         fi
     done
 
     if [ $connection_ok -eq 0 ]; then
         cecho "red" "❌ No internet connection detected."
-        cecho "yellow" "   Please connect to Wi-Fi and try again."
-        exit 1
+        cecho "yellow" "   Troubleshooting:"
+        cecho "yellow" "   1. Check Wi-Fi is connected: iwconfig"
+        cecho "yellow" "   2. Test manually: ping -c 3 8.8.8.8"
+        cecho "yellow" "   3. Check DNS: ping -c 3 github.com"
+        echo
+        cecho "blue" "   Your network status:"
+        ip addr show wlan0 2>/dev/null | grep "inet " || echo "   No wlan0 IP address"
+        echo
+        read -p "Skip internet check and continue anyway? (y/N): " skip_check || true
+        if [[ "$skip_check" =~ ^[Yy]$ ]]; then
+            cecho "yellow" "⚠ Continuing without internet check (may fail later)"
+            log "User skipped internet check"
+        else
+            exit 1
+        fi
+    else
+        cecho "green" "✓ Internet connection OK"
     fi
-    cecho "green" "✓ Internet connection OK"
 
     # Check if running on Raspberry Pi
     if [ ! -f /proc/device-tree/model ]; then
         cecho "yellow" "⚠ Warning: This doesn't appear to be a Raspberry Pi."
-        read -p "Continue anyway? (y/N): " continue_choice
+        read -p "Continue anyway? (y/N): " continue_choice || true
         [[ ! "$continue_choice" =~ ^[Yy]$ ]] && exit 1
     else
         local pi_model
@@ -200,7 +230,7 @@ pre_flight_checks() {
         if echo "$pi_model" | grep -qE "Pi Zero W|Pi 1"; then
             cecho "yellow" "⚠ Warning: $pi_model may not have enough power for AirPlay 2"
             cecho "yellow" "   Recommended: Pi Zero 2 or newer"
-            read -p "Continue anyway? (y/N): " continue_choice
+            read -p "Continue anyway? (y/N): " continue_choice || true
             [[ ! "$continue_choice" =~ ^[Yy]$ ]] && exit 1
         fi
     fi
@@ -277,7 +307,7 @@ select_audio_device() {
         cecho "yellow" "⚠ No external USB DAC detected!"
         cecho "yellow" "   Only built-in audio found."
         echo
-        read -p "Do you want to use built-in audio? (y/N): " use_builtin
+        read -p "Do you want to use built-in audio? (y/N): " use_builtin || true
 
         if [[ "$use_builtin" =~ ^[Yy]$ ]]; then
             mapfile -t external_devices < <(echo "$all_cards")
@@ -305,7 +335,7 @@ select_audio_device() {
 
         local device_choice
         while true; do
-            read -p "Enter the number [0-$((${#external_devices[@]}-1))]: " device_choice
+            read -p "Enter the number [0-$((${#external_devices[@]}-1))]: " device_choice || true
 
             if [[ "$device_choice" =~ ^[0-9]+$ ]] && [ "$device_choice" -lt "${#external_devices[@]}" ]; then
                 break
@@ -337,7 +367,7 @@ select_audio_device() {
     else
         cecho "red" "❌ Audio device validation failed"
         cecho "yellow" "   The device may not support playback."
-        read -p "Continue anyway? (y/N): " continue_choice
+        read -p "Continue anyway? (y/N): " continue_choice || true
         [[ ! "$continue_choice" =~ ^[Yy]$ ]] && exit 1
     fi
 
@@ -387,7 +417,7 @@ get_airplay_name() {
     cecho "blue" "This is the name that will appear on your iPhone/iPad."
     cecho "blue" "Examples: Living Room, Bedroom Speaker, Kitchen Audio"
     echo
-    read -p "Enter a name (or press Enter for '$hostname AirPlay'): " airplay_name
+    read -p "Enter a name (or press Enter for '$hostname AirPlay'): " airplay_name || true
 
     if [ -z "$airplay_name" ]; then
         airplay_name="$hostname AirPlay"
@@ -419,7 +449,7 @@ configure_wifi() {
     cecho "blue" "Wi-Fi power saving can cause audio stuttering and dropouts."
     cecho "blue" "Disabling it ensures smooth, uninterrupted playback."
     echo
-    read -p "Disable Wi-Fi power saving? (Y/n): " wifi_choice
+    read -p "Disable Wi-Fi power saving? (Y/n): " wifi_choice || true
 
     if [[ -z "$wifi_choice" || "$wifi_choice" =~ ^[Yy]$ ]]; then
         disable_wifi_pm=true
@@ -433,6 +463,9 @@ configure_wifi() {
 
 # --- Main Installation ---
 main() {
+    # Initialize log file immediately
+    touch "$LOG_FILE" 2>/dev/null || LOG_FILE="/tmp/airplay_install_fallback.log"
+
     clear
     cecho "green" "╔═════════════════════════════════════════════════════╗"
     cecho "green" "║                                                     ║"
@@ -446,14 +479,16 @@ main() {
     echo
     cecho "yellow" "Installation log: $LOG_FILE"
     echo
-    read -p "Press Enter to begin..."
-    echo
 
     log "=== AirPlay 2 Installation Started ==="
     log "Script Version: $SCRIPT_VERSION"
     log "Date: $(date)"
     log "User: $(whoami)"
     log "System: $(uname -a)"
+    echo
+
+    read -p "Press Enter to begin..." || true
+    echo
 
     # Run all setup steps
     pre_flight_checks
@@ -474,7 +509,7 @@ main() {
     cecho "blue" "Installation will take 10-30 minutes depending on your Pi model."
     cecho "blue" "(Pi Zero 2 will be slower, Pi 4/5 will be faster)"
     echo
-    read -p "Press Enter to start installation, or Ctrl+C to cancel..."
+    read -p "Press Enter to start installation, or Ctrl+C to cancel..." || true
     echo
 
     INSTALLATION_FAILED=1  # Mark that installation has started
@@ -547,11 +582,21 @@ main() {
     cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     log "Cloning NQPTP repository..."
 
+    # Verify /tmp is writable
+    if [ ! -w /tmp ]; then
+        cecho "red" "❌ /tmp directory is not writable"
+        exit 1
+    fi
+
     safe_cd /tmp
     rm -rf nqptp 2>/dev/null || true
 
     if ! git clone https://github.com/mikebrady/nqptp.git 2>&1 | tee -a "$LOG_FILE"; then
         cecho "red" "❌ Failed to clone NQPTP repository"
+        cecho "yellow" "   Possible causes:"
+        cecho "yellow" "   - No internet connection"
+        cecho "yellow" "   - GitHub is down"
+        cecho "yellow" "   - Firewall blocking access"
         exit 1
     fi
 
@@ -578,6 +623,13 @@ main() {
         exit 1
     fi
 
+    # Verify binary was installed
+    if ! command_exists nqptp; then
+        cecho "red" "❌ NQPTP binary not found after installation"
+        cecho "yellow" "   Expected location: /usr/local/bin/nqptp"
+        exit 1
+    fi
+
     # Enable and start NQPTP
     sudo systemctl enable nqptp 2>&1 | tee -a "$LOG_FILE"
     sudo systemctl restart nqptp 2>&1 | tee -a "$LOG_FILE"
@@ -601,6 +653,10 @@ main() {
 
     if ! git clone https://github.com/mikebrady/shairport-sync.git 2>&1 | tee -a "$LOG_FILE"; then
         cecho "red" "❌ Failed to clone Shairport-Sync repository"
+        cecho "yellow" "   Possible causes:"
+        cecho "yellow" "   - No internet connection"
+        cecho "yellow" "   - GitHub is down"
+        cecho "yellow" "   - Firewall blocking access"
         exit 1
     fi
 
@@ -624,7 +680,8 @@ main() {
     log "Starting compilation with $(nproc) cores..."
 
     # Run make in background so we can show spinner
-    make -j"$(nproc)" > "$LOG_FILE.make" 2>&1 &
+    local make_log="${LOG_FILE}.make"
+    make -j"$(nproc)" > "$make_log" 2>&1 &
     local make_pid=$!
     show_spinner $make_pid
 
@@ -632,14 +689,21 @@ main() {
     if ! wait $make_pid; then
         cecho "red" "❌ Shairport-Sync compilation failed"
         cecho "yellow" "Last 20 lines of build log:"
-        tail -20 "$LOG_FILE.make"
+        tail -20 "$make_log" 2>/dev/null || echo "  (log file not available)"
         exit 1
     fi
-    cat "$LOG_FILE.make" >> "$LOG_FILE"
+    cat "$make_log" >> "$LOG_FILE" 2>/dev/null || true
 
     cecho "yellow" "Installing..."
     if ! sudo make install 2>&1 | tee -a "$LOG_FILE"; then
         cecho "red" "❌ Shairport-Sync installation failed"
+        exit 1
+    fi
+
+    # Verify binary was installed
+    if ! command_exists shairport-sync; then
+        cecho "red" "❌ Shairport-Sync binary not found after installation"
+        cecho "yellow" "   Expected location: /usr/local/bin/shairport-sync"
         exit 1
     fi
 
@@ -690,6 +754,12 @@ sessioncontrol = {
   session_timeout = 20;
 };
 EOF
+
+    # Verify config file was created
+    if [ ! -f /etc/shairport-sync.conf ]; then
+        cecho "red" "❌ Configuration file was not created"
+        exit 1
+    fi
 
     cecho "green" "✓ Configuration file created"
 
@@ -835,7 +905,7 @@ EOF
     cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo
 
-    read -p "Do you want to test audio output? (Y/n): " test_audio
+    read -p "Do you want to test audio output? (Y/n): " test_audio || true
     if [[ -z "$test_audio" || "$test_audio" =~ ^[Yy]$ ]]; then
         cecho "yellow" "Playing test sound in 2 seconds..."
         cecho "yellow" "(You should hear a voice saying 'Front Left', 'Front Right')"
@@ -844,7 +914,7 @@ EOF
         if timeout 10 speaker-test -D "$audio_device_plug" -c 2 -t wav -l 1 > /dev/null 2>&1; then
             echo
             cecho "green" "✓ Audio test completed!"
-            read -p "Did you hear the test sound? (y/N): " heard_sound
+            read -p "Did you hear the test sound? (y/N): " heard_sound || true
             if [[ ! "$heard_sound" =~ ^[Yy]$ ]]; then
                 cecho "yellow" "⚠ If you didn't hear sound, check:"
                 cecho "yellow" "  - Speaker/headphone connections"
@@ -860,7 +930,8 @@ EOF
 
     # --- Cleanup ---
     cecho "blue" "Cleaning up temporary files..."
-    rm -rf /tmp/nqptp /tmp/shairport-sync "$LOG_FILE.make" 2>/dev/null || true
+    rm -rf /tmp/nqptp /tmp/shairport-sync 2>/dev/null || true
+    rm -f "${LOG_FILE}.make" 2>/dev/null || true
     cecho "green" "✓ Cleanup complete"
     echo
 
@@ -902,7 +973,11 @@ EOF
     cecho "blue" "   Installation log:  $LOG_FILE"
     echo
 
-    read -p "Press Enter to reboot now (recommended), or Ctrl+C to reboot later..."
+    read -p "Press Enter to reboot now (recommended), or Ctrl+C to reboot later..." || {
+        echo
+        cecho "yellow" "Reboot cancelled. Remember to reboot later with: sudo reboot"
+        exit 0
+    }
 
     log "User initiated reboot"
     cecho "yellow" "Rebooting in 3 seconds..."
