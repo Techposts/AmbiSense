@@ -10,7 +10,7 @@ The core of AmbiSense is built around an ESP32 microcontroller that interfaces w
 We also developed a [Custom Home Assistant Integration](https://github.com/Techposts/ambisense-homeassistant) allowing you to integrate and control the AmbiSense from the Home Assistant and also run powerful automations.
 <p align="center">
   <img src="https://i.imgur.com/6YUbPAu.png" width="500" alt="Custom HA Integration">
-</p>
+</p> 
 
 # AmbiSense: Radar-Controlled LED System
 <p align="center">
