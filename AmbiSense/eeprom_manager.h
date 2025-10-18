@@ -1,14 +1,6 @@
 #ifndef EEPROM_MANAGER_H
 #define EEPROM_MANAGER_H
 
-// Calibration data structure
-struct UStairCalibrationData {
-  uint16_t master_led_start;
-  uint16_t master_led_end;
-  uint16_t slave_led_start;
-  uint16_t slave_led_end;
-};
-
 /**
  * Initializes the EEPROM module
  */
@@ -48,7 +40,6 @@ void saveAdvancedSettings();
 void saveMotionSettings();
 void saveEspnowSettings();
 void saveLEDDistributionSettings();
-void saveUStairCalibrationData(const UStairCalibrationData& data);
 
 /**
  * Reset settings to defaults
@@ -78,10 +69,5 @@ void loadLEDDistributionSettings();
  * Validate LED distribution settings
  */
 void validateLEDDistributionSettings();
-
-/**
- * Load U-Stair calibration data from EEPROM
- */
-UStairCalibrationData loadUStairCalibrationData();
 
 #endif // EEPROM_MANAGER_H

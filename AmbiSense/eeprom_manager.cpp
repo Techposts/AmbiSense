@@ -661,24 +661,3 @@ uint8_t calculateLEDDistributionCRC() {
 
   return crc;
 }
-
-void saveUStairCalibrationData(const UStairCalibrationData& data) {
-  EEPROM.write(EEPROM_ADDR_U_STAIR_MASTER_START_L, data.master_led_start & 0xFF);
-  EEPROM.write(EEPROM_ADDR_U_STAIR_MASTER_START_H, (data.master_led_start >> 8) & 0xFF);
-  EEPROM.write(EEPROM_ADDR_U_STAIR_MASTER_END_L, data.master_led_end & 0xFF);
-  EEPROM.write(EEPROM_ADDR_U_STAIR_MASTER_END_H, (data.master_led_end >> 8) & 0xFF);
-  EEPROM.write(EEPROM_ADDR_U_STAIR_SLAVE_START_L, data.slave_led_start & 0xFF);
-  EEPROM.write(EEPROM_ADDR_U_STAIR_SLAVE_START_H, (data.slave_led_start >> 8) & 0xFF);
-  EEPROM.write(EEPROM_ADDR_U_STAIR_SLAVE_END_L, data.slave_led_end & 0xFF);
-  EEPROM.write(EEPROM_ADDR_U_STAIR_SLAVE_END_H, (data.slave_led_end >> 8) & 0xFF);
-  EEPROM.commit();
-}
-
-UStairCalibrationData loadUStairCalibrationData() {
-  UStairCalibrationData data;
-  data.master_led_start = EEPROM.read(EEPROM_ADDR_U_STAIR_MASTER_START_L) | (EEPROM.read(EEPROM_ADDR_U_STAIR_MASTER_START_H) << 8);
-  data.master_led_end = EEPROM.read(EEPROM_ADDR_U_STAIR_MASTER_END_L) | (EEPROM.read(EEPROM_ADDR_U_STAIR_MASTER_END_H) << 8);
-  data.slave_led_start = EEPROM.read(EEPROM_ADDR_U_STAIR_SLAVE_START_L) | (EEPROM.read(EEPROM_ADDR_U_STAIR_SLAVE_START_H) << 8);
-  data.slave_led_end = EEPROM.read(EEPROM_ADDR_U_STAIR_SLAVE_END_L) | (EEPROM.read(EEPROM_ADDR_U_STAIR_SLAVE_END_H) << 8);
-  return data;
-}

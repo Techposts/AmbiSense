@@ -578,11 +578,6 @@ void updateLEDsWithMultiSensorData() {
       break;
     }
 
-    case SENSOR_PRIORITY_U_STAIR: {
-      selectedDistance = handleUStairPriority(currentTime);
-      break;
-    }
-
     default: {
       selectedDistance = handleMostRecentPriority(currentTime);
       break;
@@ -679,29 +674,6 @@ int handleMasterFirstPriority(unsigned long currentTime) {
   }
 }
 
-int handleUStairPriority(unsigned long currentTime) {
-  UStairCalibrationData calibrationData = loadUStairCalibrationData();
-  bool masterDetected = (latestSensorData[0].distance > 0 && currentTime - latestSensorData[0].timestamp < 5000);
-  bool slaveDetected = false;
-  int slaveDistance = 0;
-
-  for (int i = 1; i <= numSlaveDevices; i++) {
-    if (latestSensorData[i].distance > 0 && currentTime - latestSensorData[i].timestamp < 5000) {
-      slaveDetected = true;
-      slaveDistance = latestSensorData[i].distance;
-      break;
-    }
-  }
-
-  if (masterDetected) {
-    return map(latestSensorData[0].distance, minDistance, maxDistance, calibrationData.master_led_start, calibrationData.master_led_end - movingLightSpan);
-  } else if (slaveDetected) {
-    return map(slaveDistance, minDistance, maxDistance, calibrationData.slave_led_start, calibrationData.slave_led_end - movingLightSpan);
-  }
-
-  return currentDistance;
-}
-
 // Enhanced zone-based priority with better hysteresis
 int handleZoneBasedPriority(unsigned long currentTime) {
   if (!zoneState.initialized) {
@@ -781,7 +753,7 @@ int handleZoneBasedPriority(unsigned long currentTime) {
 
 // Set the sensor priority mode
 void setSensorPriorityMode(uint8_t mode) {
-  if (mode <= SENSOR_PRIORITY_U_STAIR) {
+  if (mode <= SENSOR_PRIORITY_ZONE_BASED) {
     sensorPriorityMode = mode;
     EEPROM.write(EEPROM_ADDR_SENSOR_PRIORITY_MODE, sensorPriorityMode);
     EEPROM.commit();
@@ -792,7 +764,7 @@ void setSensorPriorityMode(uint8_t mode) {
     }
 
     if (ENABLE_ESPNOW_LOGGING) {
-      const char* modeNames[] = {"Most Recent", "Slave First", "Master First", "Zone-Based", "U-Stair"};
+      const char* modeNames[] = {"Most Recent", "Slave First", "Master First", "Zone-Based"};
       Serial.printf("ESP-NOW: Sensor priority mode set to %s (%d)\n",
                    modeNames[mode], mode);
     }

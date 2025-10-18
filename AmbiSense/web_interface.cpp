@@ -40,11 +40,6 @@ String getEffectsHTML() {
 String getMeshHTML() {
   return buildFullPage(mesh_tab_full, "mesh", FPSTR(mesh_tab_js));
 }
-
-String getCalibrationHTML() {
-  return buildFullPage(calibration_tab_full, "calibration", FPSTR(calibration_tab_js));
-}
-
 void handleDiagnostics() {
   // Generate diagnostics page using standard template structure
   String diagnosticsContent = R"(
@@ -260,9 +255,6 @@ void setupWebServer() {
   server.on("/advanced", HTTP_GET, handleAdvanced);
   server.on("/effects", HTTP_GET, handleEffects);
   server.on("/mesh", HTTP_GET, handleMesh);
-  server.on("/calibration", HTTP_GET, handleCalibration);
-  server.on("/getCalibration", HTTP_GET, handleGetCalibration);
-  server.on("/setCalibration", HTTP_GET, handleSetCalibration);
 
   // Use simplified network handlers
   server.on("/network", HTTP_GET, handleNetwork);
@@ -450,34 +442,6 @@ void handleMesh() {
   server.send(200, "text/html; charset=utf-8", html);
 }
 
-void handleCalibration() {
-  String html = getCalibrationHTML();
-  server.sendHeader("Cache-Control", "max-age=300");
-  server.sendHeader("Content-Length", String(html.length()));
-  server.send(200, "text/html; charset=utf-8", html);
-}
-
-void handleGetCalibration() {
-  UStairCalibrationData data = loadUStairCalibrationData();
-  String json = "{";
-  json += "\"master_led_start\":" + String(data.master_led_start) + ",";
-  json += "\"master_led_end\":" + String(data.master_led_end) + ",";
-  json += "\"slave_led_start\":" + String(data.slave_led_start) + ",";
-  json += "\"slave_led_end\":" + String(data.slave_led_end);
-  json += "}";
-  server.send(200, "application/json; charset=utf-8", json);
-}
-
-void handleSetCalibration() {
-  UStairCalibrationData data;
-  data.master_led_start = server.arg("masterStart").toInt();
-  data.master_led_end = server.arg("masterEnd").toInt();
-  data.slave_led_start = server.arg("slaveStart").toInt();
-  data.slave_led_end = server.arg("slaveEnd").toInt();
-  saveUStairCalibrationData(data);
-  server.send(200, "application/json; charset=utf-8", "{\"status\":\"success\"}");
-}
-
 void handleNetwork() {
   String html = getNetworkHTML();
   server.sendHeader("Cache-Control", "max-age=300");
@@ -526,110 +490,172 @@ void handleSet() {
   bool firstChange = true;
   String errorMessage = "";
 
-  // --- 1. Parse all incoming arguments into temporary variables ---
-  int newNumLeds = server.hasArg("numLeds") ? server.arg("numLeds").toInt() : numLeds;
-  int newMinDist = server.hasArg("minDist") ? server.arg("minDist").toInt() : minDistance;
-  int newMaxDist = server.hasArg("maxDist") ? server.arg("maxDist").toInt() : maxDistance;
-  int newBrightness = server.hasArg("brightness") ? server.arg("brightness").toInt() : brightness;
-  int newLightSpan = server.hasArg("lightSpan") ? server.arg("lightSpan").toInt() : movingLightSpan;
-  int newRedValue = server.hasArg("redValue") ? server.arg("redValue").toInt() : redValue;
-  int newGreenValue = server.hasArg("greenValue") ? server.arg("greenValue").toInt() : greenValue;
-  int newBlueValue = server.hasArg("blueValue") ? server.arg("blueValue").toInt() : blueValue;
+  if (server.hasArg("numLeds")) {
+    int newNumLeds = server.arg("numLeds").toInt();
 
-  // --- 2. Perform a single validation pass on all temporary variables ---
-  if (!validateLEDCount(newNumLeds)) {
-    errorMessage = "Invalid LED count: " + String(newNumLeds) + " (max: " + String(MAX_SUPPORTED_LEDS) + ")";
-  } else if (newMinDist < 0 || newMinDist >= newMaxDist || newMinDist > 500) {
-    errorMessage = "Invalid minimum distance (must be less than max distance and at most 500)";
-  } else if (newMaxDist <= newMinDist || newMaxDist > 1000) {
-    errorMessage = "Invalid maximum distance (must be greater than min distance and at most 1000)";
-  } else if (newBrightness < 0 || newBrightness > 255) {
-    errorMessage = "Invalid brightness (must be between 0 and 255)";
-  } else if (newLightSpan <= 0 || newLightSpan > 100) {
-    errorMessage = "Invalid light span (must be between 1 and 100)";
-  } else if (newRedValue < 0 || newRedValue > 255) {
-    errorMessage = "Invalid red value (must be between 0 and 255)";
-  } else if (newGreenValue < 0 || newGreenValue > 255) {
-    errorMessage = "Invalid green value (must be between 0 and 255)";
-  } else if (newBlueValue < 0 || newBlueValue > 255) {
-    errorMessage = "Invalid blue value (must be between 0 and 255)";
+    // Enhanced validation for LED count
+    if (!validateLEDCount(newNumLeds)) {
+      errorMessage = "Invalid LED count: " + String(newNumLeds) + " (max: " + String(MAX_SUPPORTED_LEDS) + ")";
+    } else if (numLeds != newNumLeds) {
+      Serial.printf("Web UI: Changing LED count from %d to %d\n", numLeds, newNumLeds);
+
+      // Force reinitialization of LED strip
+      reinitializeLEDStrip(newNumLeds);
+
+      settingsChanged = true;
+      if (!firstChange) response += ",";
+      response += "\"numLeds\"";
+      firstChange = false;
+
+      Serial.printf("Web UI: LED count successfully changed to %d\n", numLeds);
+    }
   }
 
-  // --- 3. If validation fails, return an error ---
-  if (errorMessage != "") {
-    server.send(400, "application/json; charset=utf-8", "{\"status\":\"error\",\"message\":\"" + errorMessage + "\"}");
-    return;
+  if (server.hasArg("minDist")) {
+    int newMinDist = server.arg("minDist").toInt();
+    // Ensure newMinDist is in valid range and less than maxDistance
+    if (newMinDist >= 0 && newMinDist < maxDistance && newMinDist <= 500) {
+      if (minDistance != newMinDist) {
+        minDistance = newMinDist;
+        settingsChanged = true;
+        if (!firstChange) response += ",";
+        response += "\"minDistance\"";
+        firstChange = false;
+
+        // Debug logging
+        Serial.printf("Web UI set minDistance to %d\n", minDistance);
+      }
+    } else {
+      // Log invalid value and set error message
+      Serial.printf("INVALID min distance from web: %d (max is %d)\n", newMinDist, maxDistance);
+      errorMessage = "Invalid minimum distance (must be < max distance and ≤ 500)";
+    }
   }
 
-  // --- 4. If validation succeeds, apply all the new values ---
-  if (numLeds != newNumLeds) {
-    reinitializeLEDStrip(newNumLeds);
-    settingsChanged = true;
-    if (!firstChange) response += ",";
-    response += "\"numLeds\"";
-    firstChange = false;
+  if (server.hasArg("maxDist")) {
+    int newMaxDist = server.arg("maxDist").toInt();
+    // Ensure newMaxDist is in valid range and greater than minDistance
+    if (newMaxDist > minDistance && newMaxDist <= 1000) {
+      if (maxDistance != newMaxDist) {
+        maxDistance = newMaxDist;
+        settingsChanged = true;
+        if (!firstChange) response += ",";
+        response += "\"maxDistance\"";
+        firstChange = false;
+
+        // Debug logging
+        Serial.printf("Web UI set maxDistance to %d\n", maxDistance);
+      }
+    } else {
+      // Log invalid value and set error message
+      Serial.printf("INVALID max distance from web: %d (min is %d)\n", newMaxDist, minDistance);
+      errorMessage = "Invalid maximum distance (must be > min distance and ≤ 1000)";
+    }
   }
-  if (minDistance != newMinDist) {
-    minDistance = newMinDist;
-    settingsChanged = true;
-    if (!firstChange) response += ",";
-    response += "\"minDistance\"";
-    firstChange = false;
+
+  if (server.hasArg("brightness")) {
+    int newBrightness = server.arg("brightness").toInt();
+    if (newBrightness >= 0 && newBrightness <= 255) {
+      if (brightness != newBrightness) {
+        brightness = newBrightness;
+        settingsChanged = true;
+        if (!firstChange) response += ",";
+        response += "\"brightness\"";
+        firstChange = false;
+      }
+    } else {
+      errorMessage = "Invalid brightness (must be between 0 and 255)";
+    }
   }
-  if (maxDistance != newMaxDist) {
-    maxDistance = newMaxDist;
-    settingsChanged = true;
-    if (!firstChange) response += ",";
-    response += "\"maxDistance\"";
-    firstChange = false;
+
+  if (server.hasArg("lightSpan")) {
+    int newLightSpan = server.arg("lightSpan").toInt();
+    if (newLightSpan > 0 && newLightSpan <= 100) {
+      if (movingLightSpan != newLightSpan) {
+        movingLightSpan = newLightSpan;
+        settingsChanged = true;
+        if (!firstChange) response += ",";
+        response += "\"movingLightSpan\"";
+        firstChange = false;
+
+        // Save settings immediately
+        saveSettings();
+        EEPROM.commit();
+        updateLEDConfig();
+      }
+    } else {
+      errorMessage = "Invalid light span (must be between 1 and 100)";
+    }
   }
-  if (brightness != newBrightness) {
-    brightness = newBrightness;
-    settingsChanged = true;
-    if (!firstChange) response += ",";
-    response += "\"brightness\"";
-    firstChange = false;
+
+  // Handle RGB color values
+  if (server.hasArg("redValue")) {
+    int newRedValue = server.arg("redValue").toInt();
+    if (newRedValue >= 0 && newRedValue <= 255) {
+      if (redValue != newRedValue) {
+        redValue = newRedValue;
+        settingsChanged = true;
+        if (!firstChange) response += ",";
+        response += "\"redValue\"";
+        firstChange = false;
+      }
+    } else {
+      errorMessage = "Invalid red value (must be between 0 and 255)";
+    }
   }
-  if (movingLightSpan != newLightSpan) {
-    movingLightSpan = newLightSpan;
-    settingsChanged = true;
-    if (!firstChange) response += ",";
-    response += "\"movingLightSpan\"";
-    firstChange = false;
+
+  if (server.hasArg("greenValue")) {
+    int newGreenValue = server.arg("greenValue").toInt();
+    if (newGreenValue >= 0 && newGreenValue <= 255) {
+      if (greenValue != newGreenValue) {
+        greenValue = newGreenValue;
+        settingsChanged = true;
+        if (!firstChange) response += ",";
+        response += "\"greenValue\"";
+        firstChange = false;
+      }
+    } else {
+      errorMessage = "Invalid green value (must be between 0 and 255)";
+    }
   }
-  if (redValue != newRedValue) {
-    redValue = newRedValue;
-    settingsChanged = true;
-    if (!firstChange) response += ",";
-    response += "\"redValue\"";
-    firstChange = false;
-  }
-  if (greenValue != newGreenValue) {
-    greenValue = newGreenValue;
-    settingsChanged = true;
-    if (!firstChange) response += ",";
-    response += "\"greenValue\"";
-    firstChange = false;
-  }
-  if (blueValue != newBlueValue) {
-    blueValue = newBlueValue;
-    settingsChanged = true;
-    if (!firstChange) response += ",";
-    response += "\"blueValue\"";
-    firstChange = false;
+
+  if (server.hasArg("blueValue")) {
+    int newBlueValue = server.arg("blueValue").toInt();
+    if (newBlueValue >= 0 && newBlueValue <= 255) {
+      if (blueValue != newBlueValue) {
+        blueValue = newBlueValue;
+        settingsChanged = true;
+        if (!firstChange) response += ",";
+        response += "\"blueValue\"";
+        firstChange = false;
+      }
+    } else {
+      errorMessage = "Invalid blue value (must be between 0 and 255)";
+    }
   }
 
   response += "]}";
 
   if (settingsChanged) {
-    saveSettings();
+    // Save settings and ensure they are committed
+    saveSettings();  // Save all settings to EEPROM
+
+    // Add a small delay to ensure EEPROM write completes
+    delay(10);
+
+    // Update LED configuration (this will handle LED count changes properly)
     updateLEDConfig();
+
+    // Send the response that was built
     server.send(200, "application/json; charset=utf-8", response);
+  } else if (errorMessage != "") {
+    // Return error message if validation failed
+    server.send(400, "application/json; charset=utf-8", "{\"status\":\"error\",\"message\":\"" + errorMessage + "\"}");
   } else {
+    // If nothing changed but there were no errors
     server.send(200, "application/json; charset=utf-8", "{\"status\":\"success\",\"message\":\"No changes needed\"}");
   }
 }
-
 
 // Add new endpoint for LED testing
 void handleTestLEDs() {

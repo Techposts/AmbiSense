@@ -136,7 +136,6 @@ const char html_template_full[] PROGMEM = R"literal(<!DOCTYPE html>
 <button class="tab %ADVANCED_TAB_ACTIVE%" onclick="window.location.href='/advanced'">Advanced</button>
 <button class="tab %EFFECTS_TAB_ACTIVE%" onclick="window.location.href='/effects'">Effects</button>
 <button class="tab %MESH_TAB_ACTIVE%" onclick="window.location.href='/mesh'">Multi-Sensor</button>
-<button class="tab %CALIBRATION_TAB_ACTIVE%" onclick="window.location.href='/calibration'">Calibration</button>
 <button class="tab %NETWORK_TAB_ACTIVE%" onclick="window.location.href='/network'">Network</button>
 <button class="tab %DIAGNOSTICS_TAB_ACTIVE%" onclick="window.location.href='/diagnostics'">Diagnostics</button>
 </div>
@@ -1210,65 +1209,6 @@ window.addEventListener('beforeunload', function() {
 </script>
 )literal";
 
-const char calibration_tab_full[] PROGMEM = R"literal(
-<div class="form-group">
-<label>Master Sensor LED Range</label>
-<div class="slider-container">
-<input type="number" min="0" max="2000" class="led-count-input" id="masterLedStart" value="0">
-<span style="color: var(--text-secondary); margin: 0 10px;">to</span>
-<input type="number" min="0" max="2000" class="led-count-input" id="masterLedEnd" value="149">
-</div>
-</div>
-<div class="form-group">
-<label>Slave Sensor LED Range</label>
-<div class="slider-container">
-<input type="number" min="0" max="2000" class="led-count-input" id="slaveLedStart" value="150">
-<span style="color: var(--text-secondary); margin: 0 10px;">to</span>
-<input type="number" min="0" max="2000" class="led-count-input" id="slaveLedEnd" value="299">
-</div>
-</div>
-<button class="button" id="saveCalibrationButton">Save Calibration</button>
-)literal";
-
-const char calibration_tab_js[] PROGMEM = R"literal(
-<script>
-document.getElementById('saveCalibrationButton').addEventListener('click', function() {
-    const masterLedStart = document.getElementById('masterLedStart').value;
-    const masterLedEnd = document.getElementById('masterLedEnd').value;
-    const slaveLedStart = document.getElementById('slaveLedStart').value;
-    const slaveLedEnd = document.getElementById('slaveLedEnd').value;
-    fetch('/setCalibration?masterStart=' + masterLedStart + '&masterEnd=' + masterLedEnd + '&slaveStart=' + slaveLedStart + '&slaveEnd=' + slaveLedEnd)
-        .then(response => response.json())
-        .then(data => {
-            if (data.status === 'success') {
-                showSavedNotification();
-            }
-        })
-        .catch(error => {
-            console.error('Error saving calibration:', error);
-        });
-});
-
-function loadCalibrationSettings() {
-    fetch('/getCalibration')
-        .then(response => response.json())
-        .then(settings => {
-            document.getElementById('masterLedStart').value = settings.master_led_start;
-            document.getElementById('masterLedEnd').value = settings.master_led_end;
-            document.getElementById('slaveLedStart').value = settings.slave_led_start;
-            document.getElementById('slaveLedEnd').value = settings.slave_led_end;
-        })
-        .catch(error => {
-            console.error('Error loading calibration settings:', error);
-        });
-}
-
-window.addEventListener('DOMContentLoaded', (event) => {
-    loadCalibrationSettings();
-});
-</script>
-)literal";
-
 // Utility function to build complete HTML page
 String buildFullPage(const char* tabContent, const char* activeTab, const __FlashStringHelper* tabScripts = nullptr) {
   String html = FPSTR(html_template_full);
@@ -1282,7 +1222,6 @@ String buildFullPage(const char* tabContent, const char* activeTab, const __Flas
   html.replace("%ADVANCED_TAB_ACTIVE%", strcmp(activeTab, "advanced") == 0 ? "active" : "");
   html.replace("%EFFECTS_TAB_ACTIVE%", strcmp(activeTab, "effects") == 0 ? "active" : "");
   html.replace("%MESH_TAB_ACTIVE%", strcmp(activeTab, "mesh") == 0 ? "active" : "");
-  html.replace("%CALIBRATION_TAB_ACTIVE%", strcmp(activeTab, "calibration") == 0 ? "active" : "");
   html.replace("%NETWORK_TAB_ACTIVE%", strcmp(activeTab, "network") == 0 ? "active" : "");
   html.replace("%DIAGNOSTICS_TAB_ACTIVE%", strcmp(activeTab, "diagnostics") == 0 ? "active" : "");
 
