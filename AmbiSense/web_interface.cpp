@@ -40,6 +40,11 @@ String getEffectsHTML() {
 String getMeshHTML() {
   return buildFullPage(mesh_tab_full, "mesh", FPSTR(mesh_tab_js));
 }
+
+String getCalibrationHTML() {
+  return buildFullPage(calibration_tab_full, "calibration", FPSTR(calibration_tab_js));
+}
+
 void handleDiagnostics() {
   // Generate diagnostics page using standard template structure
   String diagnosticsContent = R"(
@@ -205,9 +210,9 @@ document.addEventListener('DOMContentLoaded', updateDiagnostics);
 </script>
 )");
 
-  // Build the complete page using standard template with tab navigation  
+  // Build the complete page using standard template with tab navigation
   String html = buildFullPage(diagnosticsContent.c_str(), "diagnostics", reinterpret_cast<const __FlashStringHelper*>(diagnosticsScripts.c_str()));
-  
+
   server.send(200, "text/html; charset=utf-8", html);
 }
 
@@ -227,17 +232,17 @@ void handleDiagnosticData() {
   json += "\"motionSmoothing\":" + String(motionSmoothingEnabled ? "true" : "false") + ",";
   json += "\"minDistance\":" + String(minDistance) + ",";
   json += "\"maxDistance\":" + String(maxDistance) + ",";
-  
+
   // Add ESP-NOW MAC address
   uint8_t espnow_mac[6];
   getESPNOWMacAddress(espnow_mac);  // Use helper function for consistency
   char espnow_mac_str[18];
-  sprintf(espnow_mac_str, "%02X:%02X:%02X:%02X:%02X:%02X", 
-          espnow_mac[0], espnow_mac[1], espnow_mac[2], 
+  sprintf(espnow_mac_str, "%02X:%02X:%02X:%02X:%02X:%02X",
+          espnow_mac[0], espnow_mac[1], espnow_mac[2],
           espnow_mac[3], espnow_mac[4], espnow_mac[5]);
   json += "\"espnowMac\":\"" + String(espnow_mac_str) + "\"";
   json += "}";
-  
+
   server.send(200, "application/json; charset=utf-8", json);
 }
 
@@ -249,21 +254,24 @@ String getNetworkHTML() {
 void setupWebServer() {
   // Wait a moment to ensure WiFi is fully initialized
   delay(100);
-  
+
   // Define handlers for each endpoint
   server.on("/", HTTP_GET, handleRoot);
   server.on("/advanced", HTTP_GET, handleAdvanced);
   server.on("/effects", HTTP_GET, handleEffects);
   server.on("/mesh", HTTP_GET, handleMesh);
-  
+  server.on("/calibration", HTTP_GET, handleCalibration);
+  server.on("/getCalibration", HTTP_GET, handleGetCalibration);
+  server.on("/setCalibration", HTTP_GET, handleSetCalibration);
+
   // Use simplified network handlers
   server.on("/network", HTTP_GET, handleNetwork);
   server.on("/network", HTTP_POST, handleNetworkPost);
-  
+
   server.on("/set", HTTP_GET, handleSet);
   server.on("/distance", HTTP_GET, handleDistance);
   server.on("/settings", HTTP_GET, handleSettings);
-  
+
   server.on("/setLightMode", HTTP_GET, handleSetLightMode);
   server.on("/setDirectionalLight", HTTP_GET, handleSetDirectionalLight);
   server.on("/setCenterShift", HTTP_GET, handleSetCenterShift);
@@ -274,16 +282,16 @@ void setupWebServer() {
   server.on("/setEffectSpeed", HTTP_GET, handleSetEffectSpeed);
   server.on("/setEffectIntensity", HTTP_GET, handleSetEffectIntensity);
   server.on("/setSensorPriorityMode", HTTP_GET, handleSetSensorPriorityMode);
-  
+
   // LED-specific endpoints
   server.on("/testLEDs", HTTP_GET, handleTestLEDs);
   server.on("/reinitLEDs", HTTP_GET, handleReinitLEDs);
-  
+
   // LED Distribution endpoints
   server.on("/setLEDSegmentMode", HTTP_GET, handleSetLEDSegmentMode);
   server.on("/getLEDSegmentInfo", HTTP_GET, handleGetLEDSegmentInfo);
   server.on("/setLEDSegmentInfo", HTTP_GET, handleSetLEDSegmentInfo);
-  
+
   // ESP-NOW mesh configuration endpoints
   server.on("/getDeviceInfo", HTTP_GET, handleGetDeviceInfo);
   server.on("/setDeviceRole", HTTP_GET, handleSetDeviceRole);
@@ -295,7 +303,7 @@ void setupWebServer() {
   server.on("/diagnostics", HTTP_GET, handleDiagnostics);
   server.on("/diagnosticdata", HTTP_GET, handleDiagnosticData);
   server.on("/resetdistance", HTTP_GET, handleResetDistanceValues);
-  
+
   // Stair Configuration Wizard endpoints
   server.on("/wizard", HTTP_GET, handleWizardStart);
   server.on("/wizard/step", HTTP_POST, handleWizardStep);
@@ -307,15 +315,15 @@ void setupWebServer() {
   // WiFi management
   server.on("/resetwifi", HTTP_GET, handleResetWifi);
   server.on("/scannetworks", HTTP_GET, handleScanNetworks);
-  
+
   // Serve static files from SPIFFS
   server.serveStatic("/", SPIFFS, "/");
-  
+
   // 404 handler
   server.onNotFound([]() {
     server.send(404, "text/plain", "Not found");
   });
-  
+
   // Start server
   server.begin();
   Serial.println("HTTP server started on port " + String(WEB_SERVER_PORT));
@@ -325,7 +333,7 @@ void handleSetSensorPriorityMode() {
     uint8_t mode = server.arg("mode").toInt();
     if (mode <= SENSOR_PRIORITY_ZONE_BASED) {
       setSensorPriorityMode(mode);
-      
+
       server.send(200, "application/json; charset=utf-8", "{\"status\":\"success\",\"message\":\"Sensor priority mode updated\"}");
     } else {
       server.send(400, "application/json; charset=utf-8", "{\"status\":\"error\",\"message\":\"Invalid mode parameter\"}");
@@ -353,14 +361,14 @@ void handleSetLEDSegmentMode() {
 void handleGetLEDSegmentInfo() {
   int start, length, total;
   getLEDSegmentInfo(&start, &length, &total);
-  
+
   String json = "{";
   json += "\"mode\":" + String(getLEDSegmentMode()) + ",";
   json += "\"start\":" + String(start) + ",";
   json += "\"length\":" + String(length) + ",";
   json += "\"total\":" + String(total);
   json += "}";
-  
+
   server.send(200, "application/json; charset=utf-8", json);
 }
 
@@ -369,12 +377,12 @@ void handleSetLEDSegmentInfo() {
     int start = server.arg("start").toInt();
     int length = server.arg("length").toInt();
     int total = server.arg("total").toInt();
-    
+
     // Validate parameters
     if (start >= 0 && length > 0 && total > 0 && start + length <= total) {
       setLEDSegmentInfo(start, length, total);
       saveLEDDistributionSettings();
-      
+
       server.send(200, "application/json; charset=utf-8", "{\"status\":\"success\",\"message\":\"LED segment info updated\"}");
     } else {
       server.send(400, "application/json; charset=utf-8", "{\"status\":\"error\",\"message\":\"Invalid segment parameters\"}");
@@ -388,19 +396,19 @@ void handleResetDistanceValues() {
   // Reset just min/max distance settings to defaults
   minDistance = DEFAULT_MIN_DISTANCE;
   maxDistance = DEFAULT_MAX_DISTANCE;
-  
+
   // Save to EEPROM
   EEPROM.write(EEPROM_ADDR_MIN_DIST_L, minDistance & 0xFF);
   EEPROM.write(EEPROM_ADDR_MIN_DIST_H, (minDistance >> 8) & 0xFF);
   EEPROM.write(EEPROM_ADDR_MAX_DIST_L, maxDistance & 0xFF);
   EEPROM.write(EEPROM_ADDR_MAX_DIST_H, (maxDistance >> 8) & 0xFF);
-  
+
   // Calculate and save new CRC
   uint8_t newCRC = calculateSystemCRC(); // Use function from eeprom_manager
   EEPROM.write(EEPROM_ADDR_CRC, newCRC);
-  
+
   EEPROM.commit();
-  
+
   // Inform user
   String html = "<html><body style='font-family:Arial;text-align:center;'>"
                 "<h1>Distance Settings Reset</h1>"
@@ -408,7 +416,7 @@ void handleResetDistanceValues() {
                 "<p>Max Distance: " + String(maxDistance) + " cm</p>"
                 "<p><a href='/'>Return to main page</a></p>"
                 "</body></html>";
-  
+
   server.send(200, "text/html; charset=utf-8", html);
 }
 
@@ -440,6 +448,34 @@ void handleMesh() {
   server.sendHeader("Cache-Control", "max-age=300");
   server.sendHeader("Content-Length", String(html.length()));
   server.send(200, "text/html; charset=utf-8", html);
+}
+
+void handleCalibration() {
+  String html = getCalibrationHTML();
+  server.sendHeader("Cache-Control", "max-age=300");
+  server.sendHeader("Content-Length", String(html.length()));
+  server.send(200, "text/html; charset=utf-8", html);
+}
+
+void handleGetCalibration() {
+  UStairCalibrationData data = loadUStairCalibrationData();
+  String json = "{";
+  json += "\"master_led_start\":" + String(data.master_led_start) + ",";
+  json += "\"master_led_end\":" + String(data.master_led_end) + ",";
+  json += "\"slave_led_start\":" + String(data.slave_led_start) + ",";
+  json += "\"slave_led_end\":" + String(data.slave_led_end);
+  json += "}";
+  server.send(200, "application/json; charset=utf-8", json);
+}
+
+void handleSetCalibration() {
+  UStairCalibrationData data;
+  data.master_led_start = server.arg("masterStart").toInt();
+  data.master_led_end = server.arg("masterEnd").toInt();
+  data.slave_led_start = server.arg("slaveStart").toInt();
+  data.slave_led_end = server.arg("slaveEnd").toInt();
+  saveUStairCalibrationData(data);
+  server.send(200, "application/json; charset=utf-8", "{\"status\":\"success\"}");
 }
 
 void handleNetwork() {
@@ -480,7 +516,7 @@ void handleSettings() {
   json += "\"positionIGain\":" + String(positionIGain, 3) + ",";
   json += "\"sensorPriorityMode\":" + String(sensorPriorityMode);
   json += "}";
-  
+
   server.send(200, "application/json; charset=utf-8", json);
 }
 
@@ -490,172 +526,110 @@ void handleSet() {
   bool firstChange = true;
   String errorMessage = "";
 
-  if (server.hasArg("numLeds")) {
-    int newNumLeds = server.arg("numLeds").toInt();
-    
-    // Enhanced validation for LED count
-    if (!validateLEDCount(newNumLeds)) {
-      errorMessage = "Invalid LED count: " + String(newNumLeds) + " (max: " + String(MAX_SUPPORTED_LEDS) + ")";
-    } else if (numLeds != newNumLeds) {
-      Serial.printf("Web UI: Changing LED count from %d to %d\n", numLeds, newNumLeds);
-      
-      // Force reinitialization of LED strip
-      reinitializeLEDStrip(newNumLeds);
-      
-      settingsChanged = true;
-      if (!firstChange) response += ",";
-      response += "\"numLeds\"";
-      firstChange = false;
-      
-      Serial.printf("Web UI: LED count successfully changed to %d\n", numLeds);
-    }
+  // --- 1. Parse all incoming arguments into temporary variables ---
+  int newNumLeds = server.hasArg("numLeds") ? server.arg("numLeds").toInt() : numLeds;
+  int newMinDist = server.hasArg("minDist") ? server.arg("minDist").toInt() : minDistance;
+  int newMaxDist = server.hasArg("maxDist") ? server.arg("maxDist").toInt() : maxDistance;
+  int newBrightness = server.hasArg("brightness") ? server.arg("brightness").toInt() : brightness;
+  int newLightSpan = server.hasArg("lightSpan") ? server.arg("lightSpan").toInt() : movingLightSpan;
+  int newRedValue = server.hasArg("redValue") ? server.arg("redValue").toInt() : redValue;
+  int newGreenValue = server.hasArg("greenValue") ? server.arg("greenValue").toInt() : greenValue;
+  int newBlueValue = server.hasArg("blueValue") ? server.arg("blueValue").toInt() : blueValue;
+
+  // --- 2. Perform a single validation pass on all temporary variables ---
+  if (!validateLEDCount(newNumLeds)) {
+    errorMessage = "Invalid LED count: " + String(newNumLeds) + " (max: " + String(MAX_SUPPORTED_LEDS) + ")";
+  } else if (newMinDist < 0 || newMinDist >= newMaxDist || newMinDist > 500) {
+    errorMessage = "Invalid minimum distance (must be less than max distance and at most 500)";
+  } else if (newMaxDist <= newMinDist || newMaxDist > 1000) {
+    errorMessage = "Invalid maximum distance (must be greater than min distance and at most 1000)";
+  } else if (newBrightness < 0 || newBrightness > 255) {
+    errorMessage = "Invalid brightness (must be between 0 and 255)";
+  } else if (newLightSpan <= 0 || newLightSpan > 100) {
+    errorMessage = "Invalid light span (must be between 1 and 100)";
+  } else if (newRedValue < 0 || newRedValue > 255) {
+    errorMessage = "Invalid red value (must be between 0 and 255)";
+  } else if (newGreenValue < 0 || newGreenValue > 255) {
+    errorMessage = "Invalid green value (must be between 0 and 255)";
+  } else if (newBlueValue < 0 || newBlueValue > 255) {
+    errorMessage = "Invalid blue value (must be between 0 and 255)";
   }
-  
-  if (server.hasArg("minDist")) {
-    int newMinDist = server.arg("minDist").toInt();
-    // Ensure newMinDist is in valid range and less than maxDistance
-    if (newMinDist >= 0 && newMinDist < maxDistance && newMinDist <= 500) {
-      if (minDistance != newMinDist) {
-        minDistance = newMinDist;
-        settingsChanged = true;
-        if (!firstChange) response += ",";
-        response += "\"minDistance\"";
-        firstChange = false;
-        
-        // Debug logging
-        Serial.printf("Web UI set minDistance to %d\n", minDistance);
-      }
-    } else {
-      // Log invalid value and set error message
-      Serial.printf("INVALID min distance from web: %d (max is %d)\n", newMinDist, maxDistance);
-      errorMessage = "Invalid minimum distance (must be < max distance and ≤ 500)";
-    }
+
+  // --- 3. If validation fails, return an error ---
+  if (errorMessage != "") {
+    server.send(400, "application/json; charset=utf-8", "{\"status\":\"error\",\"message\":\"" + errorMessage + "\"}");
+    return;
   }
-  
-  if (server.hasArg("maxDist")) {
-    int newMaxDist = server.arg("maxDist").toInt();
-    // Ensure newMaxDist is in valid range and greater than minDistance
-    if (newMaxDist > minDistance && newMaxDist <= 1000) {
-      if (maxDistance != newMaxDist) {
-        maxDistance = newMaxDist;
-        settingsChanged = true;
-        if (!firstChange) response += ",";
-        response += "\"maxDistance\"";
-        firstChange = false;
-        
-        // Debug logging
-        Serial.printf("Web UI set maxDistance to %d\n", maxDistance);
-      }
-    } else {
-      // Log invalid value and set error message
-      Serial.printf("INVALID max distance from web: %d (min is %d)\n", newMaxDist, minDistance);
-      errorMessage = "Invalid maximum distance (must be > min distance and ≤ 1000)";
-    }
+
+  // --- 4. If validation succeeds, apply all the new values ---
+  if (numLeds != newNumLeds) {
+    reinitializeLEDStrip(newNumLeds);
+    settingsChanged = true;
+    if (!firstChange) response += ",";
+    response += "\"numLeds\"";
+    firstChange = false;
   }
-  
-  if (server.hasArg("brightness")) {
-    int newBrightness = server.arg("brightness").toInt();
-    if (newBrightness >= 0 && newBrightness <= 255) {
-      if (brightness != newBrightness) {
-        brightness = newBrightness;
-        settingsChanged = true;
-        if (!firstChange) response += ",";
-        response += "\"brightness\"";
-        firstChange = false;
-      }
-    } else {
-      errorMessage = "Invalid brightness (must be between 0 and 255)";
-    }
+  if (minDistance != newMinDist) {
+    minDistance = newMinDist;
+    settingsChanged = true;
+    if (!firstChange) response += ",";
+    response += "\"minDistance\"";
+    firstChange = false;
   }
-  
-  if (server.hasArg("lightSpan")) {
-    int newLightSpan = server.arg("lightSpan").toInt();
-    if (newLightSpan > 0 && newLightSpan <= 100) {
-      if (movingLightSpan != newLightSpan) {
-        movingLightSpan = newLightSpan;
-        settingsChanged = true;
-        if (!firstChange) response += ",";
-        response += "\"movingLightSpan\"";
-        firstChange = false;
-        
-        // Save settings immediately
-        saveSettings();
-        EEPROM.commit();
-        updateLEDConfig();
-      }
-    } else {
-      errorMessage = "Invalid light span (must be between 1 and 100)";
-    }
+  if (maxDistance != newMaxDist) {
+    maxDistance = newMaxDist;
+    settingsChanged = true;
+    if (!firstChange) response += ",";
+    response += "\"maxDistance\"";
+    firstChange = false;
   }
-  
-  // Handle RGB color values
-  if (server.hasArg("redValue")) {
-    int newRedValue = server.arg("redValue").toInt();
-    if (newRedValue >= 0 && newRedValue <= 255) {
-      if (redValue != newRedValue) {
-        redValue = newRedValue;
-        settingsChanged = true;
-        if (!firstChange) response += ",";
-        response += "\"redValue\"";
-        firstChange = false;
-      }
-    } else {
-      errorMessage = "Invalid red value (must be between 0 and 255)";
-    }
+  if (brightness != newBrightness) {
+    brightness = newBrightness;
+    settingsChanged = true;
+    if (!firstChange) response += ",";
+    response += "\"brightness\"";
+    firstChange = false;
   }
-  
-  if (server.hasArg("greenValue")) {
-    int newGreenValue = server.arg("greenValue").toInt();
-    if (newGreenValue >= 0 && newGreenValue <= 255) {
-      if (greenValue != newGreenValue) {
-        greenValue = newGreenValue;
-        settingsChanged = true;
-        if (!firstChange) response += ",";
-        response += "\"greenValue\"";
-        firstChange = false;
-      }
-    } else {
-      errorMessage = "Invalid green value (must be between 0 and 255)";
-    }
+  if (movingLightSpan != newLightSpan) {
+    movingLightSpan = newLightSpan;
+    settingsChanged = true;
+    if (!firstChange) response += ",";
+    response += "\"movingLightSpan\"";
+    firstChange = false;
   }
-  
-  if (server.hasArg("blueValue")) {
-    int newBlueValue = server.arg("blueValue").toInt();
-    if (newBlueValue >= 0 && newBlueValue <= 255) {
-      if (blueValue != newBlueValue) {
-        blueValue = newBlueValue;
-        settingsChanged = true;
-        if (!firstChange) response += ",";
-        response += "\"blueValue\"";
-        firstChange = false;
-      }
-    } else {
-      errorMessage = "Invalid blue value (must be between 0 and 255)";
-    }
+  if (redValue != newRedValue) {
+    redValue = newRedValue;
+    settingsChanged = true;
+    if (!firstChange) response += ",";
+    response += "\"redValue\"";
+    firstChange = false;
+  }
+  if (greenValue != newGreenValue) {
+    greenValue = newGreenValue;
+    settingsChanged = true;
+    if (!firstChange) response += ",";
+    response += "\"greenValue\"";
+    firstChange = false;
+  }
+  if (blueValue != newBlueValue) {
+    blueValue = newBlueValue;
+    settingsChanged = true;
+    if (!firstChange) response += ",";
+    response += "\"blueValue\"";
+    firstChange = false;
   }
 
   response += "]}";
 
   if (settingsChanged) {
-    // Save settings and ensure they are committed
-    saveSettings();  // Save all settings to EEPROM
-    
-    // Add a small delay to ensure EEPROM write completes
-    delay(10);
-    
-    // Update LED configuration (this will handle LED count changes properly)
+    saveSettings();
     updateLEDConfig();
-    
-    // Send the response that was built
     server.send(200, "application/json; charset=utf-8", response);
-  } else if (errorMessage != "") {
-    // Return error message if validation failed
-    server.send(400, "application/json; charset=utf-8", "{\"status\":\"error\",\"message\":\"" + errorMessage + "\"}");
   } else {
-    // If nothing changed but there were no errors
     server.send(200, "application/json; charset=utf-8", "{\"status\":\"success\",\"message\":\"No changes needed\"}");
   }
 }
+
 
 // Add new endpoint for LED testing
 void handleTestLEDs() {
@@ -668,18 +642,18 @@ void handleTestLEDs() {
 void handleReinitLEDs() {
   if (server.hasArg("count")) {
     int newCount = server.arg("count").toInt();
-    
+
     if (validateLEDCount(newCount)) {
       Serial.printf("Web UI: Force reinitializing LEDs to %d\n", newCount);
       reinitializeLEDStrip(newCount);
-      server.send(200, "application/json; charset=utf-8", 
+      server.send(200, "application/json; charset=utf-8",
                  "{\"status\":\"success\",\"message\":\"LEDs reinitialized\",\"count\":" + String(numLeds) + "}");
     } else {
-      server.send(400, "application/json; charset=utf-8", 
+      server.send(400, "application/json; charset=utf-8",
                  "{\"status\":\"error\",\"message\":\"Invalid LED count\"}");
     }
   } else {
-    server.send(400, "application/json; charset=utf-8", 
+    server.send(400, "application/json; charset=utf-8",
                "{\"status\":\"error\",\"message\":\"Missing count parameter\"}");
   }
 }
@@ -689,7 +663,7 @@ void handleSetLightMode() {
     lightMode = server.arg("mode").toInt();
     saveSettings();
     updateLEDConfig();
-    
+
     server.send(200, "application/json; charset=utf-8", "{\"status\":\"success\",\"message\":\"Light mode updated\"}");
   } else {
     server.send(400, "application/json; charset=utf-8", "{\"status\":\"error\",\"message\":\"Missing mode parameter\"}");
@@ -700,18 +674,18 @@ void handleSetDirectionalLight() {
   if (server.hasArg("enabled")) {
     String enabledStr = server.arg("enabled");
     bool newValue = (enabledStr == "true" || enabledStr == "1");
-    
+
     if (directionLightEnabled != newValue) {
       directionLightEnabled = newValue;
       saveAdvancedSettings(); // Save to specific section
       EEPROM.commit(); // Force commit to EEPROM
     }
-    
-    server.send(200, "application/json; charset=utf-8", 
-               "{\"status\":\"success\",\"message\":\"Directional light set to " + 
+
+    server.send(200, "application/json; charset=utf-8",
+               "{\"status\":\"success\",\"message\":\"Directional light set to " +
                String(directionLightEnabled ? "enabled" : "disabled") + "\"}");
   } else {
-    server.send(400, "application/json; charset=utf-8", 
+    server.send(400, "application/json; charset=utf-8",
                "{\"status\":\"error\",\"message\":\"Missing enabled parameter\"}");
   }
 }
@@ -721,18 +695,18 @@ void handleSetBackgroundMode() {
   if (server.hasArg("enabled")) {
     String enabledStr = server.arg("enabled");
     bool newValue = (enabledStr == "true" || enabledStr == "1");
-    
+
     if (backgroundMode != newValue) {
       backgroundMode = newValue;
       saveAdvancedSettings(); // Save to specific section
       EEPROM.commit(); // Force commit to EEPROM
     }
-    
-    server.send(200, "application/json; charset=utf-8", 
-               "{\"status\":\"success\",\"message\":\"Background mode set to " + 
+
+    server.send(200, "application/json; charset=utf-8",
+               "{\"status\":\"success\",\"message\":\"Background mode set to " +
                String(backgroundMode ? "enabled" : "disabled") + "\"}");
   } else {
-    server.send(400, "application/json; charset=utf-8", 
+    server.send(400, "application/json; charset=utf-8",
                "{\"status\":\"error\",\"message\":\"Missing enabled parameter\"}");
   }
 }
@@ -742,7 +716,7 @@ void handleSetCenterShift() {
     centerShift = server.arg("value").toInt();
     saveAdvancedSettings(); // Save to specific section
     EEPROM.commit(); // Force commit to EEPROM
-    
+
     server.send(200, "application/json; charset=utf-8", "{\"status\":\"success\",\"message\":\"Center shift updated\"}");
   } else {
     server.send(400, "application/json; charset=utf-8", "{\"status\":\"error\",\"message\":\"Missing value parameter\"}");
@@ -755,7 +729,7 @@ void handleSetTrailLength() {
     // Save to EEPROM
     saveAdvancedSettings();
     EEPROM.commit(); // Make sure we explicitly commit
-    
+
     server.send(200, "application/json; charset=utf-8", "{\"status\":\"success\",\"message\":\"Trail length updated\"}");
   } else {
     server.send(400, "application/json; charset=utf-8", "{\"status\":\"error\",\"message\":\"Missing value parameter\"}");
@@ -766,21 +740,21 @@ void handleSetMotionSmoothing() {
   if (server.hasArg("enabled")) {
     String enabledStr = server.arg("enabled");
     bool newValue = (enabledStr == "true" || enabledStr == "1");
-    
+
     if (motionSmoothingEnabled != newValue) {
       motionSmoothingEnabled = newValue;
       saveMotionSettings(); // Save to specific section
       EEPROM.commit(); // Force commit to EEPROM
     }
-    
-    server.send(200, "application/json; charset=utf-8", 
-               "{\"status\":\"success\",\"message\":\"Motion smoothing set to " + 
+
+    server.send(200, "application/json; charset=utf-8",
+               "{\"status\":\"success\",\"message\":\"Motion smoothing set to " +
                String(motionSmoothingEnabled ? "enabled" : "disabled") + "\"}");
   } else {
-    server.send(400, "application/json; charset=utf-8", 
+    server.send(400, "application/json; charset=utf-8",
                "{\"status\":\"error\",\"message\":\"Missing enabled parameter\"}");
   }
-} 
+}
 void handleSetMotionSmoothingParam() {
   if (server.hasArg("param") && server.hasArg("value")) {
     String param = server.arg("param");
@@ -792,26 +766,26 @@ void handleSetMotionSmoothingParam() {
     if (param == "positionSmoothingFactor") {
       constrainedValue = constrain(value, 0.0, 1.0);
       positionSmoothingFactor = constrainedValue;
-    } 
+    }
     else if (param == "velocitySmoothingFactor") {
       constrainedValue = constrain(value, 0.0, 1.0);
       velocitySmoothingFactor = constrainedValue;
-    } 
+    }
     else if (param == "predictionFactor") {
       constrainedValue = constrain(value, 0.0, 1.0);
       predictionFactor = constrainedValue;
-    } 
+    }
     else if (param == "positionPGain") {
       constrainedValue = constrain(value, 0.0, 1.0);
       positionPGain = constrainedValue;
-    } 
+    }
     else if (param == "positionIGain") {
       constrainedValue = constrain(value, 0.0, 0.1);  // Tighter constraint for I gain
       positionIGain = constrainedValue;
-    } 
+    }
     else {
       validParam = false;
-      server.send(400, "application/json; charset=utf-8", 
+      server.send(400, "application/json; charset=utf-8",
         "{\"error\":\"Invalid parameter\",\"param\":\"" + param + "\"}");
       return;
     }
@@ -820,19 +794,19 @@ void handleSetMotionSmoothingParam() {
       // Immediately save to ensure persistence
       saveMotionSettings();
       EEPROM.commit();  // Make sure we explicitly commit
-      
+
       // Prepare a JSON response with the actual constrained value
-      String jsonResponse = "{\"param\":\"" + param + "\",\"value\":" + 
+      String jsonResponse = "{\"param\":\"" + param + "\",\"value\":" +
         String(constrainedValue, 3) + ",\"status\":\"success\"}";
-      
+
       server.send(200, "application/json; charset=utf-8", jsonResponse);
-      
+
       if (ENABLE_DEBUG_LOGGING) {
         Serial.printf("Updated motion parameter %s to %.3f\n", param.c_str(), constrainedValue);
       }
     }
   } else {
-    server.send(400, "application/json; charset=utf-8", 
+    server.send(400, "application/json; charset=utf-8",
       "{\"error\":\"Missing parameter or value\"}");
   }
 }
@@ -841,7 +815,7 @@ void handleSetEffectSpeed() {
   if (server.hasArg("value")) {
     effectSpeed = server.arg("value").toInt();
     saveSettings();
-    
+
     server.send(200, "application/json; charset=utf-8", "{\"status\":\"success\",\"message\":\"Effect speed updated\"}");
   } else {
     server.send(400, "application/json; charset=utf-8", "{\"status\":\"error\",\"message\":\"Missing value parameter\"}");
@@ -852,7 +826,7 @@ void handleSetEffectIntensity() {
   if (server.hasArg("value")) {
     effectIntensity = server.arg("value").toInt();
     saveSettings();
-    
+
     server.send(200, "application/json; charset=utf-8", "{\"status\":\"success\",\"message\":\"Effect intensity updated\"}");
   } else {
     server.send(400, "application/json; charset=utf-8", "{\"status\":\"error\",\"message\":\"Missing value parameter\"}");
@@ -864,24 +838,24 @@ void handleNetworkPost() {
     String ssid = server.arg("ssid");
     String password = server.arg("password");
     String deviceName = server.arg("deviceName");
-    
+
     if (ssid.length() == 0 || deviceName.length() == 0) {
       server.send(400, "text/html; charset=utf-8", "<h1>Error</h1><p>SSID and Device Name cannot be empty</p><a href='/network'>Back</a>");
       return;
     }
-    
-    Serial.printf("[WiFi] Saving settings: SSID=%s, Device=%s\n", 
+
+    Serial.printf("[WiFi] Saving settings: SSID=%s, Device=%s\n",
                  ssid.c_str(), deviceName.c_str());
-    
+
     // Make sure WiFi marker is set
     EEPROM.put(EEPROM_WIFI_MARKER_ADDR, (uint16_t)0xA55A);
-    
+
     // Save credentials
     wifiManager.saveWifiCredentials(ssid.c_str(), password.c_str(), deviceName.c_str());
-    
+
     // Create sanitized hostname for display
     String hostname = wifiManager.getSanitizedHostname(deviceName.c_str());
-    
+
     // Show success page with smart auto-redirect
     String html = "<html><head><style>";
     html += "body{font-family:Arial;text-align:center;padding:50px;background:#121212;color:#fff;}";
@@ -950,9 +924,9 @@ void handleNetworkPost() {
     html += "checkConnection();";
     html += "}, 8000);";
     html += "</script></body></html>";
-    
+
     server.send(200, "text/html; charset=utf-8", html);
-    
+
     // Schedule restart
     extern bool shouldRestartDevice;
     extern unsigned long resetRequestTime;
@@ -970,9 +944,9 @@ void handleResetWifi() {
                 "<p>All WiFi settings have been cleared.</p>"
                 "<p>The device will restart in AP mode in 5 seconds...</p>"
                 "</body></html>";
-  
+
   server.send(200, "text/html; charset=utf-8", html);
-  
+
   // Schedule WiFi reset
   extern bool shouldResetWifi;
   extern unsigned long resetRequestTime;
@@ -982,30 +956,30 @@ void handleResetWifi() {
 
 void handleScanNetworks() {
   std::vector<WiFiNetwork> networks = wifiManager.scanNetworks();
-  
+
   // If no networks found, return an empty array rather than error
   String json = "[";
-  
+
   if (!networks.empty()) {
     // Limit to top 5 networks with strongest signal
     int count = min(5, (int)networks.size());
-    
+
     for (int i = 0; i < count; i++) {
       if (i > 0) json += ",";
-      
+
       // Encode the SSID for JSON (escaping quotes and backslashes)
       String escapedSSID = networks[i].ssid;
       escapedSSID.replace("\\", "\\\\");  // Escape backslashes first
       escapedSSID.replace("\"", "\\\"");  // Then escape quotes
-      
+
       json += "{\"ssid\":\"" + escapedSSID + "\",";
       json += "\"rssi\":" + String(networks[i].rssi) + ",";
       json += "\"secure\":" + String(networks[i].encType != WIFI_AUTH_OPEN ? "true" : "false") + "}";
     }
   }
-  
+
   json += "]";
-  
+
   server.send(200, "application/json; charset=utf-8", json);
 }
 
@@ -1014,32 +988,32 @@ void handleGetDeviceInfo() {
   // Create a JSON response with device role, MAC address, paired devices, and sensor priority mode
   String json = "{";
   json += "\"role\":" + String(deviceRole) + ",";
-  
+
   // Add ESP-NOW MAC address (correct MAC for mesh communication)
   uint8_t mac[6];
   getESPNOWMacAddress(mac);  // Use helper function for consistency
   char macStr[18];
-  sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X", 
+  sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X",
           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
   json += "\"mac\":\"" + String(macStr) + "\"";
-  
+
   // Add master MAC if this is a slave
   if (deviceRole == DEVICE_ROLE_SLAVE) {
     char masterMacStr[18];
-    sprintf(masterMacStr, "%02X:%02X:%02X:%02X:%02X:%02X", 
-            masterAddress[0], masterAddress[1], masterAddress[2], 
+    sprintf(masterMacStr, "%02X:%02X:%02X:%02X:%02X:%02X",
+            masterAddress[0], masterAddress[1], masterAddress[2],
             masterAddress[3], masterAddress[4], masterAddress[5]);
     json += ",\"masterMac\":\"" + String(masterMacStr) + "\"";
   }
-  
+
   // Add slave MACs if this is a master
   if (deviceRole == DEVICE_ROLE_MASTER && numSlaveDevices > 0) {
     json += ",\"slaves\":[";
     for (int i = 0; i < numSlaveDevices; i++) {
       if (i > 0) json += ",";
       char slaveMacStr[18];
-      sprintf(slaveMacStr, "%02X:%02X:%02X:%02X:%02X:%02X", 
-              slaveAddresses[i][0], slaveAddresses[i][1], slaveAddresses[i][2], 
+      sprintf(slaveMacStr, "%02X:%02X:%02X:%02X:%02X:%02X",
+              slaveAddresses[i][0], slaveAddresses[i][1], slaveAddresses[i][2],
               slaveAddresses[i][3], slaveAddresses[i][4], slaveAddresses[i][5]);
       json += "\"" + String(slaveMacStr) + "\"";
     }
@@ -1047,12 +1021,12 @@ void handleGetDeviceInfo() {
   } else {
     json += ",\"slaves\":[]";
   }
-  
+
   // Add sensor priority mode
   json += ",\"sensorPriorityMode\":" + String(sensorPriorityMode);
-  
+
   json += "}";
-  
+
   server.send(200, "application/json; charset=utf-8", json);
 }
 
@@ -1061,14 +1035,14 @@ void handleSetDeviceRole() {
     uint8_t newRole = server.arg("role").toInt();
     if (newRole == DEVICE_ROLE_MASTER || newRole == DEVICE_ROLE_SLAVE) {
       deviceRole = newRole;
-      
+
       // Save to EEPROM
       EEPROM.write(EEPROM_ADDR_DEVICE_ROLE, deviceRole);
       EEPROM.commit();
-      
+
       // Note: ESP-NOW will be reinitialized on next restart
       // Deferring reinitialization to avoid WiFi disruption
-      
+
       server.send(200, "application/json; charset=utf-8", "{\"status\":\"success\",\"message\":\"Device role updated\"}");
     } else {
       server.send(400, "application/json; charset=utf-8", "{\"status\":\"error\",\"message\":\"Invalid role value\"}");
@@ -1082,28 +1056,28 @@ void handleSetDeviceRole() {
 
 void handleScanForSlaves() {
   Serial.println("Scanning for AmbiSense slave devices...");
-  
+
   // Scan with longer timeout for better detection
   int numDevices = WiFi.scanNetworks(false, true, false, 300);
-  
+
   String jsonResponse = "[";
   int devicesFound = 0;
-  
+
   for (int i = 0; i < numDevices && devicesFound < 10; i++) {
     String ssid = WiFi.SSID(i);
-    
+
     // Only include confirmed AmbiSense devices (exclude hidden networks to avoid confusion)
-    bool isAmbiSense = ssid.startsWith(AMBISENSE_DEVICE_PREFIX) || 
+    bool isAmbiSense = ssid.startsWith(AMBISENSE_DEVICE_PREFIX) ||
                        ssid.startsWith("AmbiSense") ||
                        ssid.indexOf("AmbiSense") >= 0 ||
                        ssid.startsWith("ESP_"); // Include ESP32 default names as potential AmbiSense devices
-    
-    // Skip hidden networks and non-AmbiSense devices to avoid confusion  
+
+    // Skip hidden networks and non-AmbiSense devices to avoid confusion
     if (isAmbiSense && ssid.length() > 0) {
       if (devicesFound > 0) jsonResponse += ",";
-      
+
       uint8_t* bssid = WiFi.BSSID(i);
-      
+
       // Convert WiFi AP MAC (BSSID) to ESP-NOW STA MAC
       // On ESP32: STA MAC = AP MAC - 1 (last byte)
       uint8_t sta_mac[6];
@@ -1115,12 +1089,12 @@ void handleScanForSlaves() {
         sta_mac[5] = 0xFF;
         if (sta_mac[4] > 0) sta_mac[4]--;
       }
-      
+
       char macStr[18];
-      sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X", 
-              sta_mac[0], sta_mac[1], sta_mac[2], 
+      sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X",
+              sta_mac[0], sta_mac[1], sta_mac[2],
               sta_mac[3], sta_mac[4], sta_mac[5]);
-      
+
       // Determine signal strength label
       String signalStrength = "Unknown";
       int rssi = WiFi.RSSI(i);
@@ -1128,25 +1102,25 @@ void handleScanForSlaves() {
       else if (rssi >= -60) signalStrength = "Good";
       else if (rssi >= -70) signalStrength = "Fair";
       else signalStrength = "Weak";
-      
+
       String deviceName = ssid; // Use actual SSID name
-      
+
       jsonResponse += "{\"name\":\"" + deviceName + "\",";
       jsonResponse += "\"mac\":\"" + String(macStr) + "\",";
       jsonResponse += "\"rssi\":" + String(rssi) + ",";
       jsonResponse += "\"signal\":\"" + signalStrength + "\",";
       jsonResponse += "\"isAmbiSense\":true,";
       jsonResponse += "\"espnowMac\":\"" + String(macStr) + "\"}";
-      
+
       devicesFound++;
     }
   }
-  
+
   jsonResponse += "]";
-  
+
   // Free memory used by the scan
   WiFi.scanDelete();
-  
+
   // Send the response
   server.send(200, "application/json; charset=utf-8", jsonResponse);
 }
@@ -1154,18 +1128,18 @@ void handleScanForSlaves() {
 void handleAddSlave() {
   if (server.hasArg("mac") && deviceRole == DEVICE_ROLE_MASTER) {
     String macStr = server.arg("mac");
-    
+
     // Parse MAC address
     uint8_t mac[6];
     int values[6];
-    if (sscanf(macStr.c_str(), "%x:%x:%x:%x:%x:%x", 
-               &values[0], &values[1], &values[2], 
+    if (sscanf(macStr.c_str(), "%x:%x:%x:%x:%x:%x",
+               &values[0], &values[1], &values[2],
                &values[3], &values[4], &values[5]) == 6) {
-      
+
       for (int i = 0; i < 6; i++) {
         mac[i] = static_cast<uint8_t>(values[i]);
       }
-      
+
       // Check if we already have this slave
       bool alreadyExists = false;
       for (int i = 0; i < numSlaveDevices; i++) {
@@ -1181,47 +1155,47 @@ void handleAddSlave() {
           break;
         }
       }
-      
+
       if (!alreadyExists && numSlaveDevices < MAX_SLAVE_DEVICES) {
         // Add the new slave
         for (int i = 0; i < 6; i++) {
           slaveAddresses[numSlaveDevices][i] = mac[i];
         }
-        
+
         // Save to EEPROM
         EEPROM.write(EEPROM_ADDR_PAIRED_SLAVES, numSlaveDevices + 1);
         for (int i = 0; i < 6; i++) {
           EEPROM.write(EEPROM_ADDR_PAIRED_SLAVES + 1 + (numSlaveDevices * 6) + i, mac[i]);
         }
         EEPROM.commit();
-        
+
         // Add as ESP-NOW peer with correct channel
         esp_now_peer_info_t peerInfo = {};
         memcpy(peerInfo.peer_addr, mac, 6);
         peerInfo.channel = ESPNOW_CHANNEL; // Use fixed ESP-NOW channel
         peerInfo.encrypt = false; // No encryption for simplicity
-        
+
         if (esp_now_add_peer(&peerInfo) == ESP_OK) {
           numSlaveDevices++;
-          server.send(200, "application/json; charset=utf-8", 
+          server.send(200, "application/json; charset=utf-8",
             "{\"status\":\"success\",\"message\":\"Slave device added\"}");
         } else {
-          server.send(500, "application/json; charset=utf-8", 
+          server.send(500, "application/json; charset=utf-8",
             "{\"status\":\"error\",\"message\":\"Failed to add ESP-NOW peer\"}");
         }
       } else if (alreadyExists) {
-        server.send(400, "application/json; charset=utf-8", 
+        server.send(400, "application/json; charset=utf-8",
           "{\"status\":\"error\",\"message\":\"Slave device already paired\"}");
       } else {
-        server.send(400, "application/json; charset=utf-8", 
+        server.send(400, "application/json; charset=utf-8",
           "{\"status\":\"error\",\"message\":\"Maximum number of slave devices reached\"}");
       }
     } else {
-      server.send(400, "application/json; charset=utf-8", 
+      server.send(400, "application/json; charset=utf-8",
         "{\"status\":\"error\",\"message\":\"Invalid MAC address format\"}");
     }
   } else {
-    server.send(400, "application/json; charset=utf-8", 
+    server.send(400, "application/json; charset=utf-8",
       "{\"status\":\"error\",\"message\":\"Missing MAC address or not in master mode\"}");
   }
 }
@@ -1229,18 +1203,18 @@ void handleAddSlave() {
 void handleRemoveSlave() {
   if (server.hasArg("mac") && deviceRole == DEVICE_ROLE_MASTER) {
     String macStr = server.arg("mac");
-    
+
     // Parse MAC address
     uint8_t mac[6];
     int values[6];
-    if (sscanf(macStr.c_str(), "%x:%x:%x:%x:%x:%x", 
-               &values[0], &values[1], &values[2], 
+    if (sscanf(macStr.c_str(), "%x:%x:%x:%x:%x:%x",
+               &values[0], &values[1], &values[2],
                &values[3], &values[4], &values[5]) == 6) {
-      
+
       for (int i = 0; i < 6; i++) {
         mac[i] = static_cast<uint8_t>(values[i]);
       }
-      
+
       // Find the slave in our list
       int slaveIndex = -1;
       for (int i = 0; i < numSlaveDevices; i++) {
@@ -1256,20 +1230,20 @@ void handleRemoveSlave() {
           break;
         }
       }
-      
+
       if (slaveIndex >= 0) {
         // Remove this peer from ESP-NOW
         esp_now_del_peer(mac);
-        
+
         // Shift remaining slaves down
         for (int i = slaveIndex; i < numSlaveDevices - 1; i++) {
           for (int j = 0; j < 6; j++) {
             slaveAddresses[i][j] = slaveAddresses[i + 1][j];
           }
         }
-        
+
         numSlaveDevices--;
-        
+
         // Update EEPROM
         EEPROM.write(EEPROM_ADDR_PAIRED_SLAVES, numSlaveDevices);
         for (int i = 0; i < numSlaveDevices; i++) {
@@ -1278,31 +1252,31 @@ void handleRemoveSlave() {
           }
         }
         EEPROM.commit();
-        
-        server.send(200, "application/json; charset=utf-8", 
+
+        server.send(200, "application/json; charset=utf-8",
           "{\"status\":\"success\",\"message\":\"Slave device removed\"}");
       } else {
-        server.send(404, "application/json; charset=utf-8", 
+        server.send(404, "application/json; charset=utf-8",
           "{\"status\":\"error\",\"message\":\"Slave device not found\"}");
       }
     } else {
-      server.send(400, "application/json; charset=utf-8", 
+      server.send(400, "application/json; charset=utf-8",
         "{\"status\":\"error\",\"message\":\"Invalid MAC address format\"}");
     }
   } else {
-    server.send(400, "application/json; charset=utf-8", 
+    server.send(400, "application/json; charset=utf-8",
       "{\"status\":\"error\",\"message\":\"Missing MAC address or not in master mode\"}");
   }
 }
 void handleGetSensorData() {
   // Create JSON with latest sensor readings
   String json = "{\"sensors\":[";
-  
+
   for (int i = 0; i <= MAX_SLAVE_DEVICES; i++) {
     if (i > 0 && latestSensorData[i].timestamp == 0) continue; // Skip uninitialized slave devices
-    
+
     if (i > 0) json += ",";
-    
+
     json += "{";
     json += "\"id\":" + String(latestSensorData[i].sensorId) + ",";
     json += "\"distance\":" + String(latestSensorData[i].distance) + ",";
@@ -1311,19 +1285,19 @@ void handleGetSensorData() {
     json += "\"active\":" + String((millis() - latestSensorData[i].timestamp < 5000) ? "true" : "false");
     json += "}";
   }
-  
+
   json += "],";
   json += "\"selected\":" + String(currentDistance) + ",";
   json += "\"mode\":" + String(sensorPriorityMode);
   json += "}";
-  
+
   server.send(200, "application/json; charset=utf-8", json);
 }
 // Stair Configuration Wizard handlers
 void handleWizardStart() {
   // Initialize the wizard session before generating the start page
   initWizard();
-  
+
   // Use the fixed wizard implementation
   String html = generateWizardStartPage();
   server.send(200, "text/html; charset=utf-8", html);
@@ -1335,10 +1309,10 @@ void handleWizardStep() {
     String data = server.arg("plain");
     DynamicJsonDocument doc(1024);
     deserializeJson(doc, data);
-    
+
     String layout = doc["layout"];
     String response = processLayoutStep(layout);
-    
+
     server.send(200, "text/html; charset=utf-8", response);
   } else {
     server.send(400, "application/json", generateErrorResponse("Missing data"));
@@ -1347,30 +1321,30 @@ void handleWizardStep() {
 
 void handleWizardDiscover() {
   Serial.println("Wizard: Starting device discovery scan...");
-  
+
   // Initialize response array
   String jsonResponse = "[";
-  
+
   // Scan for WiFi networks
   int numDevices = WiFi.scanNetworks(false, true, false, 300);
   Serial.printf("Wizard: Found %d total WiFi networks\n", numDevices);
   int devicesFound = 0;
-  
+
   // Look for AmbiSense devices
   for (int i = 0; i < numDevices && devicesFound < 5; i++) {
     String ssid = WiFi.SSID(i);
     Serial.printf("Wizard: Checking network %d: '%s'\n", i, ssid.c_str());
-    
+
     // Check if this is an AmbiSense device
-    bool isAmbiSense = ssid.startsWith("AmbiSense") || 
+    bool isAmbiSense = ssid.startsWith("AmbiSense") ||
                        ssid.indexOf("AmbiSense") >= 0 ||
                        ssid.startsWith("ESP_"); // Include ESP32 default names as potential AmbiSense devices
-    
+
     if (isAmbiSense && ssid.length() > 0) {
       Serial.printf("Wizard: Found AmbiSense device: '%s'\n", ssid.c_str());
-      
+
       if (devicesFound > 0) jsonResponse += ",";
-      
+
       // Get device MAC address (convert AP BSSID to STA MAC)
       uint8_t* bssid = WiFi.BSSID(i);
       uint8_t sta_mac[6];
@@ -1381,37 +1355,37 @@ void handleWizardDiscover() {
         sta_mac[5] = 0xFF;
         if (sta_mac[4] > 0) sta_mac[4]--;
       }
-      
+
       char macStr[18];
-      sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X", 
-              sta_mac[0], sta_mac[1], sta_mac[2], 
+      sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X",
+              sta_mac[0], sta_mac[1], sta_mac[2],
               sta_mac[3], sta_mac[4], sta_mac[5]);
-      
+
       int rssi = WiFi.RSSI(i);
       String role = (devicesFound == 0) ? "Master" : "Slave";
-      
+
       // Create device JSON object
       jsonResponse += "{\"name\":\"" + ssid + "\",";
       jsonResponse += "\"mac\":\"" + String(macStr) + "\",";
       jsonResponse += "\"rssi\":" + String(rssi) + ",";
       jsonResponse += "\"role\":\"" + role + "\",";
       jsonResponse += "\"signal\":\"" + (rssi > -50 ? "Strong" : rssi > -70 ? "Medium" : "Weak") + "\"}";
-      
+
       devicesFound++;
     }
   }
-  
+
   jsonResponse += "]";
-  
+
   // Clean up WiFi scan
   WiFi.scanDelete();
-  
+
   // Update wizard state with discovered device count
   wizardState.discoveredDeviceCount = devicesFound;
-  
+
   Serial.printf("Wizard: Discovery complete. Found %d AmbiSense devices\n", devicesFound);
   Serial.printf("Wizard: Sending JSON response: %s\n", jsonResponse.c_str());
-  
+
   // Send JSON response with proper headers
   server.sendHeader("Cache-Control", "no-cache");
   server.send(200, "application/json; charset=utf-8", jsonResponse);
@@ -1426,21 +1400,21 @@ void handleWizardValidate() {
 
 void handleWizardApply() {
   Serial.println("Wizard: Applying configuration...");
-  
+
   // Apply the wizard configuration based on current state
   bool success = applyLayoutConfiguration(wizardState.selectedLayout, wizardState.discoveredDeviceCount);
-  
+
   if (success) {
     Serial.println("Wizard: Configuration applied successfully");
-    
+
     // Reset wizard state after successful application
     resetWizardState();
-    
-    server.send(200, "application/json; charset=utf-8", 
+
+    server.send(200, "application/json; charset=utf-8",
                "{\"status\":\"success\",\"message\":\"Configuration applied successfully\"}");
   } else {
     Serial.println("Wizard: Failed to apply configuration");
-    server.send(500, "application/json; charset=utf-8", 
+    server.send(500, "application/json; charset=utf-8",
                "{\"status\":\"error\",\"message\":\"Failed to apply configuration\"}");
   }
 }
@@ -1448,13 +1422,13 @@ void handleWizardApply() {
 void handleSetMasterMac() {
   if (server.hasArg("mac") && deviceRole == DEVICE_ROLE_SLAVE) {
     String macStr = server.arg("mac");
-    
+
     // Parse MAC address
     int values[6];
-    if (sscanf(macStr.c_str(), "%x:%x:%x:%x:%x:%x", 
-               &values[0], &values[1], &values[2], 
+    if (sscanf(macStr.c_str(), "%x:%x:%x:%x:%x:%x",
+               &values[0], &values[1], &values[2],
                &values[3], &values[4], &values[5]) == 6) {
-      
+
       // Validate MAC address is not all zeros
       bool allZeros = true;
       for (int i = 0; i < 6; i++) {
@@ -1463,50 +1437,50 @@ void handleSetMasterMac() {
           break;
         }
       }
-      
+
       if (allZeros) {
-        server.send(400, "application/json; charset=utf-8", 
+        server.send(400, "application/json; charset=utf-8",
           "{\"status\":\"error\",\"message\":\"Invalid MAC address - cannot be all zeros\"}");
         return;
       }
-      
+
       // Store new master MAC address
       for (int i = 0; i < 6; i++) {
         masterAddress[i] = static_cast<uint8_t>(values[i]);
         EEPROM.write(EEPROM_ADDR_MASTER_MAC + i, masterAddress[i]);
       }
-      
+
       // Commit to EEPROM first
       if (!EEPROM.commit()) {
-        server.send(500, "application/json; charset=utf-8", 
+        server.send(500, "application/json; charset=utf-8",
           "{\"status\":\"error\",\"message\":\"Failed to save master MAC to EEPROM\"}");
         return;
       }
-      
+
       // Log the new master MAC
       char masterMacStr[18];
-      sprintf(masterMacStr, "%02X:%02X:%02X:%02X:%02X:%02X", 
-              masterAddress[0], masterAddress[1], masterAddress[2], 
+      sprintf(masterMacStr, "%02X:%02X:%02X:%02X:%02X:%02X",
+              masterAddress[0], masterAddress[1], masterAddress[2],
               masterAddress[3], masterAddress[4], masterAddress[5]);
       Serial.printf("Setting new master MAC: %s\n", masterMacStr);
-      
+
       // Remove any existing peers first
       esp_now_del_peer(masterAddress); // Remove if exists (ignore error)
-      
+
       // Add the master as a peer with fixed channel
       esp_now_peer_info_t peerInfo = {};
       memcpy(peerInfo.peer_addr, masterAddress, 6);
       peerInfo.channel = ESPNOW_CHANNEL; // Use fixed ESP-NOW channel
       peerInfo.encrypt = false;
-      
+
       // Try to add the peer
       esp_err_t addResult = ESP_OK;
       if (!esp_now_is_peer_exist(masterAddress)) {
         addResult = esp_now_add_peer(&peerInfo);
-        
+
         if (addResult != ESP_OK) {
           Serial.printf("ESP-NOW: Failed to add master peer, error: %d\n", addResult);
-          server.send(500, "application/json; charset=utf-8", 
+          server.send(500, "application/json; charset=utf-8",
             "{\"status\":\"error\",\"message\":\"Failed to add master as ESP-NOW peer: " + String(addResult) + "\"}");
           return;
         }
@@ -1514,33 +1488,33 @@ void handleSetMasterMac() {
       } else {
         Serial.println("ESP-NOW: Master peer already exists");
       }
-      
+
       if (addResult == ESP_OK) {
         // Send a test message to verify connection
         sensor_data_t testData = {0};
         testData.sensorId = 1;
         testData.distance = 0;
         testData.timestamp = millis();
-        
+
         esp_err_t sendResult = esp_now_send(masterAddress, (uint8_t*)&testData, sizeof(sensor_data_t));
-        
+
         if (sendResult == ESP_OK) {
-          server.send(200, "application/json; charset=utf-8", 
+          server.send(200, "application/json; charset=utf-8",
             "{\"status\":\"success\",\"message\":\"Master device configured and test message sent\"}");
         } else {
-          server.send(200, "application/json; charset=utf-8", 
+          server.send(200, "application/json; charset=utf-8",
             "{\"status\":\"warning\",\"message\":\"Master configured but test message failed\"}");
         }
       } else {
-        server.send(500, "application/json; charset=utf-8", 
+        server.send(500, "application/json; charset=utf-8",
           "{\"status\":\"error\",\"message\":\"Failed to add master as ESP-NOW peer\"}");
       }
     } else {
-      server.send(400, "application/json; charset=utf-8", 
+      server.send(400, "application/json; charset=utf-8",
         "{\"status\":\"error\",\"message\":\"Invalid MAC address format\"}");
     }
   } else {
-    server.send(400, "application/json; charset=utf-8", 
+    server.send(400, "application/json; charset=utf-8",
       "{\"status\":\"error\",\"message\":\"Missing MAC address or not in slave mode\"}");
   }
 }

@@ -136,6 +136,7 @@ const char html_template_full[] PROGMEM = R"literal(<!DOCTYPE html>
 <button class="tab %ADVANCED_TAB_ACTIVE%" onclick="window.location.href='/advanced'">Advanced</button>
 <button class="tab %EFFECTS_TAB_ACTIVE%" onclick="window.location.href='/effects'">Effects</button>
 <button class="tab %MESH_TAB_ACTIVE%" onclick="window.location.href='/mesh'">Multi-Sensor</button>
+<button class="tab %CALIBRATION_TAB_ACTIVE%" onclick="window.location.href='/calibration'">Calibration</button>
 <button class="tab %NETWORK_TAB_ACTIVE%" onclick="window.location.href='/network'">Network</button>
 <button class="tab %DIAGNOSTICS_TAB_ACTIVE%" onclick="window.location.href='/diagnostics'">Diagnostics</button>
 </div>
@@ -235,7 +236,7 @@ function loadCurrentSettings(){fetch('/settings').then(response=>response.json()
 </script>
 )literal";
 
-// Advanced tab - Effect & Motion Tuning  
+// Advanced tab - Effect & Motion Tuning
 const char advanced_tab_full[] PROGMEM = R"literal(
 <style>
 .section-header{font-size:16px;font-weight:600;color:var(--primary);margin:20px 0 15px 0;padding-bottom:8px;border-bottom:2px solid var(--primary);display:flex;align-items:center}
@@ -570,14 +571,14 @@ Promise.all([
     document.getElementById('wifi_status').textContent = 'AP Mode';
     document.getElementById('wifi_ip').textContent = location.hostname;
   }
-  
+
   // Handle device role and conditional network form display
   if (deviceResponse.ok) {
     deviceResponse.json().then(deviceData => {
       const role = deviceData.role;
       const roleText = role == 1 ? 'Master' : role == 2 ? 'Slave' : 'Unknown';
       document.getElementById('device_role').textContent = roleText;
-      
+
       // Show/hide network configuration based on device role
       if (role == 2) { // Slave device
         document.getElementById('networkConfigForm').style.display = 'none';
@@ -657,10 +658,10 @@ let isScanning = false;
 function initMeshTab() {
   loadDeviceInfo();
   loadSlaveDevices();
-  
+
   // Start real-time monitoring if master
   meshUpdateInterval = setInterval(updateSensorData, 1000);
-  
+
   // Load segment configuration
   loadSegmentConfig();
 }
@@ -670,7 +671,7 @@ function updateDeviceRole(role) {
   // Show/hide Master MAC input section based on role
   const masterMacSection = document.getElementById('masterMacSection');
   const macDescription = document.getElementById('macDescription');
-  
+
   if (role == 2) { // Slave role
     masterMacSection.style.display = 'block';
     macDescription.textContent = 'This device\'s MAC address - share with Master device for pairing';
@@ -678,7 +679,7 @@ function updateDeviceRole(role) {
     masterMacSection.style.display = 'none';
     macDescription.textContent = 'This device\'s MAC address for ESP-NOW pairing';
   }
-  
+
   fetch('/setDeviceRole?role=' + role)
     .then(r => r.json())
     .then(data => {
@@ -707,23 +708,23 @@ function updateDeviceRole(role) {
 function setMasterMac() {
   const macInput = document.getElementById('masterMacInput');
   const mac = macInput.value.trim();
-  
+
   // Validate MAC address format
   const macPattern = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
   if (!mac || !macPattern.test(mac)) {
     alert('Please enter a valid MAC address in format XX:XX:XX:XX:XX:XX');
     return;
   }
-  
+
   // Convert to uppercase and consistent format
   const formattedMac = mac.toUpperCase().replace(/[-]/g, ':');
-  
+
   fetch('/setMasterMac?mac=' + encodeURIComponent(formattedMac))
     .then(r => r.json())
     .then(data => {
       if (data.status === 'success') {
         showSavedNotification();
-        
+
         // Update connection status immediately
         const connectionStatus = document.getElementById('connectionStatus');
         const connectionStatusText = document.getElementById('connectionStatusText');
@@ -732,11 +733,11 @@ function setMasterMac() {
         connectionStatus.style.borderLeft = '4px solid #4cc9f0';
         connectionStatusText.innerHTML = '🟢 Connected to Master: ' + formattedMac;
         connectionStatusText.style.color = '#4cc9f0';
-        
+
         // Update input styling
         macInput.value = formattedMac;
         macInput.style.borderColor = '#4cc9f0';
-        
+
         alert('Successfully connected to Master device!\n\nMAC: ' + formattedMac + '\n\nESP-NOW pairing established.');
         loadDeviceInfo();
       } else {
@@ -748,13 +749,13 @@ function setMasterMac() {
         connectionStatus.style.borderLeft = '4px solid #ff6b6b';
         connectionStatusText.innerHTML = '🔴 Connection failed: ' + (data.message || 'Unknown error');
         connectionStatusText.style.color = '#ff6b6b';
-        
+
         alert('Failed to connect to Master device: ' + (data.message || 'Unknown error'));
       }
     })
     .catch(error => {
       console.error('Error setting master MAC:', error);
-      
+
       // Show network error status
       const connectionStatus = document.getElementById('connectionStatus');
       const connectionStatusText = document.getElementById('connectionStatusText');
@@ -763,7 +764,7 @@ function setMasterMac() {
       connectionStatus.style.borderLeft = '4px solid #ff6b6b';
       connectionStatusText.innerHTML = '🔴 Network error - Please try again';
       connectionStatusText.style.color = '#ff6b6b';
-      
+
       alert('Failed to connect to Master device. Please check the MAC address and try again.');
     });
 }
@@ -772,7 +773,7 @@ function setMasterMac() {
 function copyMacAddress() {
   const macElement = document.getElementById('deviceMac');
   const mac = macElement.textContent;
-  
+
   if (mac && mac !== 'Loading...') {
     navigator.clipboard.writeText(mac).then(() => {
       showSavedNotification();
@@ -821,7 +822,7 @@ function updateLEDMode(mode) {
   } else {
     segmentConfig.style.display = 'none';
   }
-  
+
   fetch('/setLEDSegmentMode?mode=' + mode)
     .then(r => r.json())
     .then(data => {
@@ -839,36 +840,36 @@ function loadDeviceInfo() {
     .then(data => {
       // Set device role dropdown
       document.getElementById('deviceRole').value = data.role;
-      
+
       // Set sensor priority mode if element exists
       const sensorPriorityElement = document.getElementById('sensorPriorityMode');
       if (sensorPriorityElement) {
         sensorPriorityElement.value = data.sensorPriorityMode || 0;
       }
-      
+
       // Display device MAC address
       const deviceMacElement = document.getElementById('deviceMac');
       if (deviceMacElement && data.mac) {
         deviceMacElement.textContent = data.mac;
       }
-      
+
       // Show/hide Master MAC input based on role
       const masterMacSection = document.getElementById('masterMacSection');
       const macDescription = document.getElementById('macDescription');
-      
+
       if (data.role == 2) { // Slave role
         masterMacSection.style.display = 'block';
         macDescription.textContent = 'This device\'s MAC address - share with Master device for pairing';
-        
+
         // Load existing master MAC if available and show connection status
         const masterMacInput = document.getElementById('masterMacInput');
         const connectionStatus = document.getElementById('connectionStatus');
         const connectionStatusText = document.getElementById('connectionStatusText');
-        
+
         if (data.masterMac && data.masterMac !== '00:00:00:00:00:00') {
           masterMacInput.value = data.masterMac;
           masterMacInput.style.borderColor = '#4cc9f0'; // Show connected state
-          
+
           // Show connection status
           connectionStatus.style.display = 'block';
           connectionStatus.style.background = '#1a4a4a';
@@ -887,7 +888,7 @@ function loadDeviceInfo() {
         masterMacSection.style.display = 'none';
         macDescription.textContent = 'This device\'s MAC address for ESP-NOW pairing';
       }
-      
+
       // Show/hide real-time section based on role
       const realtimeSection = document.getElementById('realtimeSection');
       if (realtimeSection) {
@@ -908,7 +909,7 @@ function loadSlaveDevices() {
     .then(data => {
       const tbody = document.getElementById('slavesTableBody');
       tbody.innerHTML = '';
-      
+
       if (data.slaves && data.slaves.length > 0) {
         data.slaves.forEach((mac, index) => {
           const row = createSlaveRow(mac, index);
@@ -925,7 +926,7 @@ function loadSlaveDevices() {
 function createSlaveRow(mac, index) {
   const row = document.createElement('tr');
   const deviceName = `Slave ${index + 1}`;
-  
+
   row.innerHTML = `
     <td>${deviceName}</td>
     <td style="font-family:monospace;font-size:10px">${mac}</td>
@@ -933,32 +934,32 @@ function createSlaveRow(mac, index) {
     <td><span class="status-active">Connected</span></td>
     <td><button class="btn-small btn-remove" onclick="removeSlave('${mac}')">Remove</button></td>
   `;
-  
+
   return row;
 }
 
 // Scan for AmbiSense devices
 function scanForAmbiSenseDevices() {
   if (isScanning) return;
-  
+
   isScanning = true;
   const scanResults = document.getElementById('scanResults');
   const scanList = document.getElementById('scanList');
-  
+
   scanResults.style.display = 'block';
   scanList.innerHTML = '<div style="text-align:center;padding:20px;color:#999">🔍 Scanning for AmbiSense devices...</div>';
-  
+
   fetch('/scanForSlaves')
     .then(r => r.json())
     .then(devices => {
       scanList.innerHTML = '';
-      
+
       if (devices && devices.length > 0) {
         // Filter for AmbiSense devices only
-        const ambiSenseDevices = devices.filter(device => 
+        const ambiSenseDevices = devices.filter(device =>
           device.name && (device.name.includes('AmbiSense') || device.isAmbiSense)
         );
-        
+
         if (ambiSenseDevices.length > 0) {
           ambiSenseDevices.forEach(device => {
             const deviceItem = createDeviceItem(device);
@@ -970,7 +971,7 @@ function scanForAmbiSenseDevices() {
       } else {
         scanList.innerHTML = '<div style="text-align:center;padding:20px;color:#999">No devices found</div>';
       }
-      
+
       isScanning = false;
     })
     .catch(error => {
@@ -984,12 +985,12 @@ function scanForAmbiSenseDevices() {
 function createDeviceItem(device) {
   const item = document.createElement('div');
   item.className = 'device-item';
-  
-  const signalClass = device.rssi > -50 ? 'signal-strong' : 
+
+  const signalClass = device.rssi > -50 ? 'signal-strong' :
                      device.rssi > -70 ? 'signal-medium' : 'signal-weak';
-  const signalText = device.rssi > -50 ? 'Strong' : 
+  const signalText = device.rssi > -50 ? 'Strong' :
                     device.rssi > -70 ? 'Medium' : 'Weak';
-  
+
   item.innerHTML = `
     <div>
       <div class="device-name">${device.name || 'AmbiSense Device'}</div>
@@ -1000,7 +1001,7 @@ function createDeviceItem(device) {
       <button class="btn-small btn-add" onclick="addSlave('${device.mac}')">Add</button>
     </div>
   `;
-  
+
   return item;
 }
 
@@ -1059,9 +1060,9 @@ function updateSensorData() {
 function updateDistanceTable(data) {
   const tbody = document.getElementById('distanceTableBody');
   if (!tbody) return;
-  
+
   tbody.innerHTML = '';
-  
+
   if (data.sensors && data.sensors.length > 0) {
     data.sensors.forEach(sensor => {
       if (sensor.id !== undefined) {
@@ -1080,10 +1081,10 @@ function createDistanceRow(sensor, selectedDistance) {
   const age = sensor.age || 0;
   const isActive = age < 5000; // Active if updated within 5 seconds
   const isPriority = sensor.distance == selectedDistance;
-  
+
   // Generate MAC-like sensor ID
   const sensorId = sensor.id === 0 ? 'Master' : `A${sensor.id}:12:6D:23:...`;
-  
+
   // Determine signal strength
   let signalClass = 'signal-medium';
   let signalText = 'Medium';
@@ -1094,22 +1095,22 @@ function createDistanceRow(sensor, selectedDistance) {
     signalClass = 'signal-weak';
     signalText = 'Weak';
   }
-  
+
   const distanceText = isActive ? `${sensor.distance} cm` : '--';
   const lastUpdate = `${(age / 1000).toFixed(1)}s ago`;
-  
+
   row.innerHTML = `
     <td>${sensorId}</td>
     <td>${isPriority ? '<strong>' + distanceText + '</strong>' : distanceText}</td>
     <td><span class="${signalClass}">${signalText}</span></td>
     <td>${lastUpdate}</td>
   `;
-  
+
   // Highlight active sensor
   if (isPriority) {
     row.className = 'active-sensor';
   }
-  
+
   return row;
 }
 
@@ -1118,7 +1119,7 @@ function updateActiveSensorDisplay(data) {
   // Find the active sensor display div
   const activeDisplay = document.querySelector('.realtime-monitor > div:last-child > div:last-child');
   if (!activeDisplay) return;
-  
+
   if (data.selected !== undefined && data.sensors) {
     // Find which sensor is providing the active reading
     let activeSensor = null;
@@ -1127,7 +1128,7 @@ function updateActiveSensorDisplay(data) {
         activeSensor = sensor;
       }
     });
-    
+
     if (activeSensor) {
       const sensorId = activeSensor.id === 0 ? 'Master' : `A${activeSensor.id}:12:6D:23:...`;
       activeDisplay.innerHTML = `
@@ -1156,7 +1157,7 @@ function loadSegmentConfig() {
       document.getElementById('ledSegmentMode').value = data.mode || 0;
       document.getElementById('segmentStart').value = data.start || 0;
       document.getElementById('segmentLength').value = data.length || 300;
-      
+
       // Show/hide segment config based on mode
       const segmentConfig = document.getElementById('segmentConfig');
       if (data.mode == 1) {
@@ -1173,7 +1174,7 @@ function saveSegmentConfig() {
   const start = document.getElementById('segmentStart').value;
   const length = document.getElementById('segmentLength').value;
   const total = parseInt(start) + parseInt(length);
-  
+
   fetch(`/setLEDSegmentInfo?start=${start}&length=${length}&total=${total}`)
     .then(r => r.json())
     .then(data => {
@@ -1188,14 +1189,14 @@ function saveSegmentConfig() {
 document.addEventListener('DOMContentLoaded', function() {
   const segmentStart = document.getElementById('segmentStart');
   const segmentLength = document.getElementById('segmentLength');
-  
+
   if (segmentStart) {
     segmentStart.addEventListener('change', saveSegmentConfig);
   }
   if (segmentLength) {
     segmentLength.addEventListener('change', saveSegmentConfig);
   }
-  
+
   // Initialize mesh tab
   initMeshTab();
 });
@@ -1209,26 +1210,86 @@ window.addEventListener('beforeunload', function() {
 </script>
 )literal";
 
+const char calibration_tab_full[] PROGMEM = R"literal(
+<div class="form-group">
+<label>Master Sensor LED Range</label>
+<div class="slider-container">
+<input type="number" min="0" max="2000" class="led-count-input" id="masterLedStart" value="0">
+<span style="color: var(--text-secondary); margin: 0 10px;">to</span>
+<input type="number" min="0" max="2000" class="led-count-input" id="masterLedEnd" value="149">
+</div>
+</div>
+<div class="form-group">
+<label>Slave Sensor LED Range</label>
+<div class="slider-container">
+<input type="number" min="0" max="2000" class="led-count-input" id="slaveLedStart" value="150">
+<span style="color: var(--text-secondary); margin: 0 10px;">to</span>
+<input type="number" min="0" max="2000" class="led-count-input" id="slaveLedEnd" value="299">
+</div>
+</div>
+<button class="button" id="saveCalibrationButton">Save Calibration</button>
+)literal";
+
+const char calibration_tab_js[] PROGMEM = R"literal(
+<script>
+document.getElementById('saveCalibrationButton').addEventListener('click', function() {
+    const masterLedStart = document.getElementById('masterLedStart').value;
+    const masterLedEnd = document.getElementById('masterLedEnd').value;
+    const slaveLedStart = document.getElementById('slaveLedStart').value;
+    const slaveLedEnd = document.getElementById('slaveLedEnd').value;
+    fetch('/setCalibration?masterStart=' + masterLedStart + '&masterEnd=' + masterLedEnd + '&slaveStart=' + slaveLedStart + '&slaveEnd=' + slaveLedEnd)
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                showSavedNotification();
+            }
+        })
+        .catch(error => {
+            console.error('Error saving calibration:', error);
+        });
+});
+
+function loadCalibrationSettings() {
+    fetch('/getCalibration')
+        .then(response => response.json())
+        .then(settings => {
+            document.getElementById('masterLedStart').value = settings.master_led_start;
+            document.getElementById('masterLedEnd').value = settings.master_led_end;
+            document.getElementById('slaveLedStart').value = settings.slave_led_start;
+            document.getElementById('slaveLedEnd').value = settings.slave_led_end;
+        })
+        .catch(error => {
+            console.error('Error loading calibration settings:', error);
+        });
+}
+
+window.addEventListener('DOMContentLoaded', (event) => {
+    loadCalibrationSettings();
+});
+</script>
+)literal";
+
 // Utility function to build complete HTML page
 String buildFullPage(const char* tabContent, const char* activeTab, const __FlashStringHelper* tabScripts = nullptr) {
   String html = FPSTR(html_template_full);
-  
+
   // Replace CSS and JS
   html.replace("%CSS%", FPSTR(full_css));
   html.replace("%JS%", FPSTR(full_js));
-  
+
   // Set active tab
   html.replace("%BASIC_TAB_ACTIVE%", strcmp(activeTab, "basic") == 0 ? "active" : "");
   html.replace("%ADVANCED_TAB_ACTIVE%", strcmp(activeTab, "advanced") == 0 ? "active" : "");
   html.replace("%EFFECTS_TAB_ACTIVE%", strcmp(activeTab, "effects") == 0 ? "active" : "");
   html.replace("%MESH_TAB_ACTIVE%", strcmp(activeTab, "mesh") == 0 ? "active" : "");
+  html.replace("%CALIBRATION_TAB_ACTIVE%", strcmp(activeTab, "calibration") == 0 ? "active" : "");
   html.replace("%NETWORK_TAB_ACTIVE%", strcmp(activeTab, "network") == 0 ? "active" : "");
   html.replace("%DIAGNOSTICS_TAB_ACTIVE%", strcmp(activeTab, "diagnostics") == 0 ? "active" : "");
-  
+
   // Insert tab content and scripts
   html.replace("%TAB_CONTENT%", FPSTR(tabContent));
   html.replace("%TAB_SCRIPTS%", tabScripts ? String(tabScripts) : "");
-  
+
   return html;
 }
 
