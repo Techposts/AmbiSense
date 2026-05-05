@@ -4,6 +4,22 @@ import { Card, Toggle, Field, Slider, Row, Dot, ColorPicker, useToaster } from '
 import { LedPreview, LED_MODE_NAMES } from './led_preview';
 import { getJSON, postJSON, postBinary } from './api';
 
+/* Static CSS-gradient thumbnails for the 11 mode cards. One animated
+ * canvas (the hero) is enough; per-card animations crushed phone GPUs. */
+const THUMB_CLASSES = [
+  'thumb-standard',
+  'thumb-rainbow',
+  'thumb-color-wave',
+  'thumb-breathing',
+  'thumb-solid',
+  'thumb-comet',
+  'thumb-pulse',
+  'thumb-fire',
+  'thumb-theater-chase',
+  'thumb-dual-scan',
+  'thumb-particles',
+];
+
 interface Live { distance: number; direction: number; rssi: number; heap: number; uptime: number; peers: number; healthy: number; }
 interface AppState {
   live: Live;
@@ -142,21 +158,7 @@ export function ScreenLeds({ settings, live, reload, setToast }: AppState) {
         <div class="tab-grid">
           {LED_MODE_NAMES.map((name, i) => (
             <div class={`mode-card ${s.light_mode === i ? 'on' : ''}`} onClick={() => save({ light_mode: i })}>
-              <div class="preview" style="height: 32px;">
-                <LedPreview
-                  mode={i}
-                  rgb={[s.r ?? 255, s.g ?? 255, s.b ?? 255]}
-                  count={Math.min(40, s.led_count ?? 30)}
-                  brightness={s.brightness ?? 80}
-                  span={Math.min(8, s.span ?? 8)}
-                  distance={s.min_distance + ((s.max_distance - s.min_distance) * 0.5)}
-                  minD={s.min_distance}
-                  maxD={s.max_distance}
-                  height={32}
-                  speed={s.effect_speed}
-                  intensity={s.effect_intensity}
-                />
-              </div>
+              <div class={`preview ${THUMB_CLASSES[i]}`} />
               <div class="name">{name}</div>
             </div>
           ))}
@@ -395,7 +397,9 @@ export function ScreenNetwork({ setToast, version }: AppState) {
     setScan(null);
     getJSON('/api/wifi/scan').then(r => setScan(r.networks)).catch(e => { setScan([]); setToast(e.message, 'err'); });
   };
-  useEffect(() => { refresh(); doScan(); }, []);
+  /* Lazy: fetch wifi state on mount, but DON'T auto-scan (a 1-second wifi
+   * scan stalls the page on slow devices). User clicks "Scan" when ready. */
+  useEffect(() => { refresh(); }, []);
 
   const saveWifi = async () => {
     if (!ssid) { setToast('Pick a network', 'err'); return; }

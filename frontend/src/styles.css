@@ -197,13 +197,30 @@ input, select, textarea { font: inherit; color: inherit; }
 .tab-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
 .mode-card {
   border: 1px solid var(--line); border-radius: 10px; padding: 10px;
-  background: var(--bg-1); cursor: pointer; transition: border-color .12s, background .12s;
+  background: var(--bg-1); cursor: pointer; transition: border-color .12s, background .12s, transform .08s;
   display: flex; flex-direction: column; gap: 6px;
 }
 .mode-card:hover { background: var(--bg-3); border-color: var(--text-4); }
+.mode-card:active { transform: translateY(1px); }
 .mode-card.on { border-color: var(--acc-orange); background: rgba(255,122,61,.08); }
-.mode-card .preview { height: 32px; border-radius: 6px; background: var(--bg-3); }
+.mode-card .preview { height: 32px; border-radius: 6px; }
 .mode-card .name { font-size: 12px; font-weight: 500; }
+
+/* Static mode-card thumbnails — one CSS gradient per mode. Cheap, beautiful,
+ * no canvas paint cost. Only the active mode gets the live canvas preview
+ * in the hero card above. */
+.thumb-standard      { background: linear-gradient(90deg, #15181C 0%, #15181C 30%, var(--text-0) 32%, var(--text-0) 38%, #15181C 40%, #15181C 100%); }
+.thumb-rainbow       { background: linear-gradient(90deg, #FF3D82, #FFB54A, #4ADE80, #5BC7FF, #B57BFF, #FF3D82); }
+.thumb-color-wave    { background: linear-gradient(90deg, #FF7A3D 0%, #FFB54A 50%, #FF3D82 100%); position: relative; }
+.thumb-color-wave::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(0,0,0,.4), transparent); }
+.thumb-breathing     { background: var(--acc-grad); position: relative; opacity: .85; }
+.thumb-solid         { background: var(--acc-grad); }
+.thumb-comet         { background: linear-gradient(90deg, #15181C 0%, #15181C 60%, rgba(255,122,61,.4) 75%, var(--text-0) 90%, var(--text-0) 100%); }
+.thumb-pulse         { background: radial-gradient(circle at 50% 50%, var(--acc-orange) 0%, var(--acc-pink) 30%, transparent 70%), var(--bg-3); }
+.thumb-fire          { background: linear-gradient(0deg, #FF3D82 0%, #FF7A3D 30%, #FFB54A 65%, #FFF7E0 95%); }
+.thumb-theater-chase { background: repeating-linear-gradient(90deg, var(--acc-orange) 0 10%, transparent 10% 20%, var(--acc-orange) 20% 30%, transparent 30% 40%, var(--acc-orange) 40% 50%, transparent 50% 60%, var(--acc-orange) 60% 70%, transparent 70% 80%, var(--acc-orange) 80% 90%, transparent 90% 100%); }
+.thumb-dual-scan     { background: linear-gradient(90deg, var(--acc-orange) 0 10%, transparent 15% 85%, #5BC7FF 90% 100%); }
+.thumb-particles     { background: radial-gradient(circle at 30% 50%, var(--acc-pink) 0%, transparent 8%), radial-gradient(circle at 60% 50%, var(--acc-orange) 0%, transparent 8%), radial-gradient(circle at 78% 50%, var(--acc-amber) 0%, transparent 8%), var(--bg-3); }
 
 .color-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .swatch { width: 28px; height: 28px; border-radius: 8px; cursor: pointer; border: 2px solid transparent; }

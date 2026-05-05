@@ -47,6 +47,12 @@ export function LedPreview(p: PreviewProps) {
 
     const draw = () => {
       if (stop) return;
+      /* Pause when tab is hidden — phones don't need to burn battery on
+       * an off-screen canvas. The next visibilitychange resumes us. */
+      if (document.hidden) {
+        raf = requestAnimationFrame(draw);
+        return;
+      }
       const w = canvas.width = canvas.clientWidth * window.devicePixelRatio;
       const h = canvas.height = (p.height || 80) * window.devicePixelRatio;
       const n = Math.max(1, Math.min(p.count, 300));   /* preview cap */

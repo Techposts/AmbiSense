@@ -32,6 +32,15 @@ function App() {
   };
 
   useEffect(() => { reload(); }, []);
+  /* Poll /api/version every 30 s — uptime/free-heap don't need real-time;
+   * the live distance + RSSI + peer health come over WebSocket already. */
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.hidden) return;
+      getJSON('/api/version').then(setVersion).catch(() => {});
+    }, 30000);
+    return () => clearInterval(id);
+  }, []);
   useEffect(() => liveSocket(setLive), []);
   useEffect(() => { document.documentElement.setAttribute('data-theme', theme); localStorage.setItem('ambitheme', theme); }, [theme]);
   useEffect(() => { localStorage.setItem('ambitab', tab); }, [tab]);
