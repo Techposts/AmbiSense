@@ -1077,7 +1077,7 @@ esp_err_t webui_init(void) {
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.lru_purge_enable = true;
-    cfg.max_uri_handlers = 32;
+    cfg.max_uri_handlers = 48;   /* was 32 — overflowed at 33 once mesh/topology/factory_reset/ping/system routes were added; the /api/live WS handler stopped registering and the dashboard could no longer get live data */
     cfg.max_open_sockets = 7;
     cfg.stack_size = 8192;
     cfg.recv_wait_timeout = 10;

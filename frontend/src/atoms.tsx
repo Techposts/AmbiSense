@@ -2,7 +2,7 @@
  * handoff (frontend/design-source/project/core.jsx). Kept in their own
  * file so they're easy to lift verbatim. */
 import { JSX } from 'preact';
-import { useState } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 
 export const Icon = ({ name, size = 16, stroke = 1.6, style }: {
   name: string; size?: number; stroke?: number; style?: any;
