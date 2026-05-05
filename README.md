@@ -24,34 +24,60 @@
 > [docs/HARDWARE.md](docs/HARDWARE.md) for the full board recommendation
 > table and known issues.
 >
-> | Branch | Purpose |
+> | Branch / tag | Purpose |
 > |---|---|
-> | `main` | v5.1.1 Arduino release — stable |
-> | `v6-idf-rewrite` | v6 development branch (current) |
-> | `legacy/v5-arduino` | frozen archive of the v5.x Arduino line |
-> | tag `v6.0.0` | v6 release |
+> | `main` | v6.0.0 — current canonical firmware (this branch) |
+> | `v6-idf-rewrite` | active dev branch for v6.x work (encrypted ESP-NOW, S3 dual-core, auto-topology) |
+> | `legacy/v5-arduino` | frozen archive of the v5.x Arduino line — reference only |
+> | tag `v6.0.0` | shipped release with prebuilt C3 binaries on the release page |
 > | tag `v5.1.1` | last Arduino-era release |
 
-## v6 quickstart (ESP-IDF, requires `v5.3` LTS)
+If you cloned this repo before v6.0.0 landed and your local `main` still
+reflects the old Arduino tree, run `git fetch && git reset --hard origin/main`
+once after the merge to come up to speed. The Arduino code is preserved on
+`legacy/v5-arduino` and under `legacy/AmbiSense/` if you want to keep
+running v5.
+
+## v6 quickstart (ESP-IDF v5.5.2)
+
+**Easiest path** — flash the pre-built C3 binary from the
+[v6.0.0 release page](https://github.com/Techposts/AmbiSense/releases/tag/v6.0.0):
 
 ```sh
-# One-time
+pip install esptool
+python -m esptool --chip esp32c3 -p /dev/ttyUSB0 -b 460800 \
+    --before default_reset --after hard_reset write_flash \
+    --flash_mode dio --flash_size 4MB --flash_freq 80m \
+    0x0     bootloader-c3-v6.0.0.bin \
+    0x8000  partition-table-c3-v6.0.0.bin \
+    0x10000 ambisense-c3-v6.0.0.bin
+```
+
+**Build from source** — you need ESP-IDF v5.5.2 installed (`~/esp/esp-idf-v5.5.2/`):
+
+```sh
 git clone https://github.com/Techposts/AmbiSense.git
 cd AmbiSense/firmware
-. $IDF_PATH/export.sh
+. ~/esp/esp-idf-v5.5.2/export.sh
 
-# Build & flash for your board
-idf.py set-target esp32c3       # or: esp32, esp32s3, esp32c6
+idf.py set-target esp32c3        # or: esp32, esp32s3, esp32c6
 idf.py build flash monitor
 ```
 
-The skeleton boots, initialises NVS, resolves the board profile, and drives
-the onboard status LED into AP-mode blink (waiting-for-Wi-Fi). Wi-Fi setup
-lands in PR #2.
+After flash the device starts a Wi-Fi AP `AmbiSense-XXXX`. Connect from
+your phone — the captive portal pops at `http://192.168.4.1/`. Enter
+home Wi-Fi creds; the device joins and is reachable as
+`http://ambisense-XXXX.local/`.
 
-VSCode users: install Espressif's ESP-IDF extension to get IntelliSense for
-IDF headers — without it, clangd will report `'esp_err.h' file not found`
-and similar; the code still builds correctly via `idf.py`.
+**Recommended hardware**: ESP32-S3 DevKitC-1 or S3-Zero (dual-core,
+native USB). **Supported**: ESP32-C3 SuperMini for single-strip installs.
+See [docs/HARDWARE.md](docs/HARDWARE.md) for the full table and known
+issues.
+
+VSCode users: install Espressif's ESP-IDF extension to get IntelliSense
+for IDF headers — without it, clangd will report
+`'esp_err.h' file not found` and similar; the code still builds
+correctly via `idf.py`.
 
 ## v6 documentation
 
@@ -72,10 +98,17 @@ Assets/, STL Files/      — design assets, enclosures (unchanged)
 
 ---
 
-## v5 (Arduino) docs
+## v5 (Arduino) docs — reference only
 
-The legacy v5 documentation below applies to `main` until v6 takes over.
-For new development, target the `v6-idf-rewrite` branch.
+The text below is the original v5.1.1 Arduino README, kept here for
+people running v5 hardware. v5 is **frozen** — no further bug fixes or
+features will be backported. Running v5? Track the
+[`legacy/v5-arduino`](https://github.com/Techposts/AmbiSense/tree/legacy/v5-arduino)
+branch instead of `main`, and the source is at `legacy/AmbiSense/`
+in this tree.
+
+For new installs we strongly recommend going to v6.0.0 — see the
+quickstart above.
 
 ---
 

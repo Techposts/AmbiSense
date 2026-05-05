@@ -1,5 +1,13 @@
 # AmbiSense v6 — PR-by-PR roadmap
 
+> **Status (2026-05-05): v6.0.0 RELEASED.** All five planned PRs landed
+> plus a post-PR-5 polish pass (Kalman motion, asymmetric pairing,
+> debounced UI saves, mobile CSS, board MCU-mismatch boot guard). See
+> the [v6.0.0 release page](https://github.com/Techposts/AmbiSense/releases/tag/v6.0.0)
+> for the user-facing summary.
+>
+> v6.x roadmap (post-6.0.0 work) is at the bottom of this file.
+
 Five PRs. Each is independently flashable and validated on real C3
 hardware before the next starts. Releases tagged `v6.0.0-alpha.N` from
 PR #2 onwards; final `v6.0.0` ships with PR #5.
@@ -185,3 +193,43 @@ Move v5 README content fully behind a "v5 legacy" link.
 | `v6.0.0`           | PR #5 merge    | feature complete      |
 
 CI auto-attaches per-board firmware artifacts to tag pushes.
+
+---
+
+## v6.x roadmap (post-6.0.0)
+
+These are tracked but did NOT ship in 6.0.0. See the v6.0.0 release
+notes for the user-facing version of the same list.
+
+### Hardening
+- **Encrypted ESP-NOW** — derive a PMK from a user mesh password,
+  enable per-peer LMK, store in NVS namespace `mesh.pmk`. Targets are
+  defined in `mesh.h` (the `mesh_event_cb_t` plumbing is already in
+  place); the actual `esp_now_set_pmk` call and UI password field are
+  v6.1 work.
+- **Signed OTA** — `esp_secure_boot` + signed `.bin` with rollback. The
+  bootloader rollback path is already armed; signing keys + UI
+  workflow are pending.
+- **Persistent sessions** — auth tokens currently live in RAM, lost on
+  reboot. Move to NVS with explicit revocation list.
+
+### UX / scale
+- **Auto-topology learning** — "walk through your stairs" mode where
+  the device records distance histograms over a 60 s window and
+  proposes segment boundaries automatically.
+- **Dual-core pinning (S3 / classic)** — `xTaskCreatePinnedToCore` for
+  Wi-Fi/HTTP on core 0 and radar+LED+motion on core 1. Lifts the
+  HTTP-saturates-render limitation we currently work around with the
+  client-side debounce.
+- **LED count beyond 300** — verified; lift the documented soft cap to
+  the theoretical 1500-pixel limit per device.
+- **Realistic `sim` radar** — replay captured LD2410 frame logs
+  instead of emitting a slow sine.
+
+### Misc
+- **OTA preserves paired peers** — currently a factory reset wipes the
+  topology blob too; needs a "keep mesh config" toggle.
+- **`esp32s3-zero` profile validation** — pinmap is correct in the
+  profile; needs a hardware bring-up + photo for HARDWARE.md once an
+  S3-Zero arrives on bench.
+- **Factory reset preserves Wi-Fi** option.
