@@ -3,29 +3,34 @@
   <img src="https://raw.githubusercontent.com/Techposts/AmbiSense/refs/heads/main/Assets/AmbiSense.webp" width="300" alt="AmbiSense Logo">
 </p>
 
-> ### 🔧 v6 is a ground-up rewrite — in progress
+> ### 🚀 v6.0.0 shipped — full ESP-IDF + FreeRTOS rewrite
 >
-> We're moving AmbiSense off Arduino onto **ESP-IDF + FreeRTOS** so the firmware
-> can drive radar reads, LED rendering, web serving, and ESP-NOW peer-mesh as
-> independent tasks instead of one cooperative `loop()`. v6 also adds
-> **LD2450 multi-target tracking**, a **modular radar driver layer** (LD2410 /
-> LD2412 / LD2420 / LD2450 / sim — switch via web UI without reflashing), a
-> **board picker with editable pin map** for ESP32-C3 / ESP32 / S3 / C6, a
-> **peer mesh** for U/L/asymmetric stairs (no more master/slave), **OTA
-> updates**, **captive portal**, and a **brand-new web UI** designed in
-> Claude Design.
+> v6 is a ground-up rewrite from Arduino onto **ESP-IDF + FreeRTOS**: independent
+> FreeRTOS tasks for radar read, motion smoothing, LED rendering, web serving,
+> and ESP-NOW peer-mesh — no more cooperative `loop()` starving the LED
+> render under HTTP load. v6 ships with **LD2450 multi-target tracking**, a
+> **modular radar driver layer** (LD2410 / LD2412 / LD2420 / LD2450 / sim —
+> swap via web UI without reflashing), a **board picker with editable pin map**
+> (ESP32-C3 / ESP32 / S3 / C6), a **peer mesh** for U/L/asymmetric stairs
+> (every device runs identical code; lowest-MAC wins coordinator),
+> **asymmetric pairing** (click Pair on either device → both join), a
+> **Kalman-based motion filter** (3 user knobs instead of v5's 5 cryptic
+> gains), **OTA with rollback**, **captive portal**, **PBKDF2-SHA256 auth**,
+> and a **fully responsive Preact web UI** (sidebar on desktop, bottom-tab
+> nav on mobile).
+>
+> **Recommended hardware: ESP32-S3 (DevKitC-1 or S3-Zero).** ESP32-C3 SuperMini
+> is supported for single-strip installs. See
+> [docs/HARDWARE.md](docs/HARDWARE.md) for the full board recommendation
+> table and known issues.
 >
 > | Branch | Purpose |
 > |---|---|
-> | `main` | v5.1.1 Arduino release — stable, do not break |
-> | `v6-idf-rewrite` | active rewrite (this PR series) |
-> | `legacy/v5-arduino` | frozen archive of the v5.x line |
+> | `main` | v5.1.1 Arduino release — stable |
+> | `v6-idf-rewrite` | v6 development branch (current) |
+> | `legacy/v5-arduino` | frozen archive of the v5.x Arduino line |
+> | tag `v6.0.0` | v6 release |
 > | tag `v5.1.1` | last Arduino-era release |
->
-> Current status: **PR #1 of 5 — IDF skeleton merged.** Wi-Fi + web (#2),
-> radar + LED engine (#3), peer mesh + topology (#4), and the new UI (#5)
-> follow. Each PR is independently flashable; releases will be tagged
-> `v6.0.0-alpha.N` until P5 ships.
 
 ## v6 quickstart (ESP-IDF, requires `v5.3` LTS)
 

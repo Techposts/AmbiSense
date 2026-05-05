@@ -4,6 +4,17 @@ For locked architectural decisions about which boards/sensors are
 supported, see [`V6-ARCHITECTURE.md`](V6-ARCHITECTURE.md). This file
 covers the practical "I have hardware in front of me" stuff.
 
+## Board recommendation (read this first)
+
+| Tier | Board | Why |
+| ---- | ----- | --- |
+| **Recommended** | **ESP32-S3 DevKitC-1** *or* **ESP32-S3-Zero** | Dual-core LX7 @ 240 MHz, native USB-OTG (no CH340 driver fights), 512 KB SRAM. Wi-Fi/HTTP can be pinned to core 0 and radar+LED+motion to core 1 — slider floods can't starve the render loop. Headroom for v6.1 features (auto-topology, encrypted ESP-NOW, larger strips). Best choice for a stairwell with mesh peers. |
+| **Supported** | **ESP32-C3 SuperMini** | Single-core RISC-V @ 160 MHz. The validated v6.0 reference build. Fine for **single-strip, single-device** installs. The 300 ms client-side debounced-save shipped with v6.0 prevents HTTP saturation under slider drag. Stops being the right choice the moment you want >2 mesh peers or >300 LEDs. |
+| **Deprecated** | ESP32 classic (WROOM-32) | Older silicon, no native USB, no advantage over S3. Profile still builds; not recommended for new installs. |
+| **Avoid** | ESP32-C6 | Single-core, *less* SRAM than C3, and Wi-Fi 6 / Thread don't help AmbiSense. |
+
+If you're starting from scratch and asked us "which board do I buy" → **S3-Zero**. If you already have a C3 SuperMini on the bench → it works.
+
 ## Reference wiring (ESP32-C3 SuperMini)
 
 This is the validated reference build for v6.0.
@@ -52,12 +63,17 @@ for v6, the firmware reads everything via UART.
 
 ## Supported boards (v6.0)
 
-| Profile               | Status   | LED pin | Radar RX | Radar TX | Button | Status LED    |
-| --------------------- | -------- | ------- | -------- | -------- | ------ | ------------- |
-| `esp32c3-supermini`   | ✅ valid | 10      | 20       | 21       | 4      | 8 (active-low)|
-| `esp32-devkit`        | builds   | 5       | 16       | 17       | 4      | 2             |
-| `esp32s3-zero`        | builds   | 21      | 4        | 5        | 9      | 21            |
-| `esp32c6-devkit`      | builds   | 8       | 4        | 5        | 9      | 15            |
+| Profile               | Status        | LED pin | Radar RX | Radar TX | Button | Status LED    |
+| --------------------- | ------------- | ------- | -------- | -------- | ------ | ------------- |
+| `esp32s3-zero`        | recommended   | 21      | 4        | 5        | 9      | 21            |
+| `esp32c3-supermini`   | ✅ validated  | 10      | 20       | 21       | 4      | 8 (active-low)|
+| `esp32-devkit`        | deprecated    | 5       | 16       | 17       | 4      | 2             |
+| `esp32c6-devkit`      | builds only   | 8       | 4        | 5        | 9      | 15            |
+
+The `esp32s3-zero` profile is structurally validated (the firmware
+builds and the pinmap is correct for the AliExpress S3-Zero / S3-Mini
+clones) but Ravi's bench currently only has C3s — full hardware
+validation pending arrival of S3 units.
 
 Profiles defined in
 [`firmware/components/board/board.c`](../firmware/components/board/board.c).
@@ -146,6 +162,46 @@ idf.py -p /dev/cu.usbmodem... monitor
 or any serial terminal at 115200 baud. Logs are also mirrored to a
 16 KB in-RAM ring buffer accessible at `GET /api/logs` once PR #2's
 web server is up.
+
+### Device boots but second one isn't visible (no AP, no STA)
+
+**Symptom**: After flashing, the device serial output shows boot logs
+but no AP `AmbiSense-XXXX` shows up on a phone scan and the device
+never joins Wi-Fi. First device works fine.
+
+**Most common cause**: stale NVS holding a board profile for a
+different MCU (e.g., `esp32-devkit` saved on a C3 from a prior test
+flash). v6.0 ships an MCU-mismatch boot guard that catches this on
+new boots, but if you're upgrading from an alpha build the safest
+recovery is:
+
+```sh
+idf.py -p /dev/cu.usbmodemXXXXXXX erase-flash
+idf.py -p /dev/cu.usbmodemXXXXXXX flash
+```
+
+The erase-flash wipes the NVS partition so the device boots with
+factory defaults. Confirm with `idf.py monitor` — you should see
+`Board profile (default): esp32c3-supermini (ESP32-C3 SuperMini)`
+followed by netmgr starting AP.
+
+### Slider in web UI throws ERR_CONNECTION_RESET
+
+**Symptom**: Dragging a slider in the LED or Motion screen flood-fires
+`POST /api/settings` and the browser console fills with
+`ERR_CONNECTION_RESET` / `ERR_EMPTY_RESPONSE`.
+
+**Cause**: The C3 is single-core. The HTTP server, ESP-NOW broadcast,
+radar UART, motion smoother, and LED render task all run on one
+RISC-V core. Sliders fire `onChange` ~30 times/second; each one was
+posting + reloading at full rate, saturating the httpd's
+`max_open_sockets = 7`.
+
+**Fix**: v6.0 adds a 300 ms debounced-save on the client side
+(`useDebouncedSave` in `frontend/src/screens.tsx`). The slider only
+POSTs once you stop dragging, and multiple slider changes within
+300 ms get coalesced into a single batched request body. If you
+build the UI yourself, make sure you're on commit `0b63b6e` or later.
 
 ### Brownout reset loop
 
