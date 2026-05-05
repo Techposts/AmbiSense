@@ -3,6 +3,69 @@
   <img src="https://raw.githubusercontent.com/Techposts/AmbiSense/refs/heads/main/Assets/AmbiSense.webp" width="300" alt="AmbiSense Logo">
 </p>
 
+> ### 🔧 v6 is a ground-up rewrite — in progress
+>
+> We're moving AmbiSense off Arduino onto **ESP-IDF + FreeRTOS** so the firmware
+> can drive radar reads, LED rendering, web serving, and ESP-NOW peer-mesh as
+> independent tasks instead of one cooperative `loop()`. v6 also adds
+> **LD2450 multi-target tracking**, a **modular radar driver layer** (LD2410 /
+> LD2412 / LD2420 / LD2450 / sim — switch via web UI without reflashing), a
+> **board picker with editable pin map** for ESP32-C3 / ESP32 / S3 / C6, a
+> **peer mesh** for U/L/asymmetric stairs (no more master/slave), **OTA
+> updates**, **captive portal**, and a **brand-new web UI** designed in
+> Claude Design.
+>
+> | Branch | Purpose |
+> |---|---|
+> | `main` | v5.1.1 Arduino release — stable, do not break |
+> | `v6-idf-rewrite` | active rewrite (this PR series) |
+> | `legacy/v5-arduino` | frozen archive of the v5.x line |
+> | tag `v5.1.1` | last Arduino-era release |
+>
+> Current status: **PR #1 of 5 — IDF skeleton merged.** Wi-Fi + web (#2),
+> radar + LED engine (#3), peer mesh + topology (#4), and the new UI (#5)
+> follow. Each PR is independently flashable; releases will be tagged
+> `v6.0.0-alpha.N` until P5 ships.
+
+## v6 quickstart (ESP-IDF, requires `v5.3` LTS)
+
+```sh
+# One-time
+git clone https://github.com/Techposts/AmbiSense.git
+cd AmbiSense/firmware
+. $IDF_PATH/export.sh
+
+# Build & flash for your board
+idf.py set-target esp32c3       # or: esp32, esp32s3, esp32c6
+idf.py build flash monitor
+```
+
+The skeleton boots, initialises NVS, resolves the board profile, and drives
+the onboard status LED into AP-mode blink (waiting-for-Wi-Fi). Wi-Fi setup
+lands in PR #2.
+
+VSCode users: install Espressif's ESP-IDF extension to get IntelliSense for
+IDF headers — without it, clangd will report `'esp_err.h' file not found`
+and similar; the code still builds correctly via `idf.py`.
+
+## Repo layout
+
+```
+firmware/                — ESP-IDF v6 source (this is where new work goes)
+frontend/design-source/  — Claude-Design handoff bundle for the v6 UI (read frontend/design-source/README.md)
+legacy/AmbiSense/        — v5.x Arduino source, preserved for reference
+Assets/, STL Files/      — design assets, enclosures (unchanged)
+```
+
+---
+
+## v5 (Arduino) docs
+
+The legacy v5 documentation below applies to `main` until v6 takes over.
+For new development, target the `v6-idf-rewrite` branch.
+
+---
+
 AmbiSense is an innovative smart lighting solution that uses radar sensing technology to create responsive ambient lighting experiences. The system detects movement and distance using an LD2410 radar sensor and dynamically controls NeoPixel LED strips in real-time, creating an interactive lighting environment.
 
 The core of AmbiSense is built around an ESP32 microcontroller that interfaces with an LD2410 radar module and NeoPixel LED strips. The system creates a moving light pattern that responds to a person's proximity, with the illuminated section of the LED strip changing based on detected distance.

@@ -1,0 +1,58 @@
+# AmbiSense v6 — common sdkconfig defaults applied to every board
+# Per-board overrides live in sdkconfig.defaults.<target> (e.g. sdkconfig.defaults.esp32c3)
+
+# --- Partition table -----------------------------------------------------
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+
+# --- App / OTA -----------------------------------------------------------
+CONFIG_APP_COMPILE_TIME_DATE=y
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_BOOTLOADER_WDT_ENABLE=y
+CONFIG_BOOTLOADER_WDT_TIME_MS=9000
+
+# --- Task watchdog (catch our own hangs) ---------------------------------
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=5
+CONFIG_ESP_TASK_WDT_PANIC=y
+
+# --- Logging -------------------------------------------------------------
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_TIMESTAMP_SOURCE_RTOS=y
+CONFIG_LOG_COLORS=y
+
+# --- Coredump to flash partition (post-mortem via web UI later) ---------
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+
+# --- FreeRTOS ------------------------------------------------------------
+CONFIG_FREERTOS_HZ=1000
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS=y
+
+# --- WiFi ----------------------------------------------------------------
+CONFIG_ESP_WIFI_ENABLE_WPA3_SAE=y
+CONFIG_ESP_WIFI_SOFTAP_BEACON_MAX_LEN=752
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=10
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=32
+
+# --- HTTP server ---------------------------------------------------------
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+CONFIG_HTTPD_MAX_URI_LEN=512
+CONFIG_HTTPD_WS_SUPPORT=y
+
+# --- mDNS ----------------------------------------------------------------
+CONFIG_MDNS_MAX_SERVICES=10
+
+# --- LWIP ----------------------------------------------------------------
+CONFIG_LWIP_LOCAL_HOSTNAME="ambisense"
+CONFIG_LWIP_MAX_SOCKETS=10
+
+# --- Compiler ------------------------------------------------------------
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_COMPILER_WARN_WRITE_STRINGS=y
+CONFIG_COMPILER_STACK_CHECK_MODE_NORM=y
