@@ -1,0 +1,16 @@
+# C3 SuperMini specific overrides
+# RISC-V single-core, 400 KB SRAM, 4 MB flash, 2 RMT TX channels, USB-Serial-JTAG console.
+
+CONFIG_IDF_TARGET="esp32c3"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# C3 has USB-Serial-JTAG built in — use it for console (no UART0 needed for logs)
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Brownout: leave detection on but threshold low — user has separate LED PSU,
+# but USB power dips during heavy WiFi TX still happen.
+CONFIG_ESP_BROWNOUT_DET=y
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7=y
+
+# Single core — no SMP toggles needed

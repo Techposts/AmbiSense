@@ -1,0 +1,45 @@
+name: firmware
+
+on:
+  push:
+    branches: [main, v6-idf-rewrite]
+    tags: ['v6.*']
+    paths:
+      - 'firmware/**'
+      - '.github/workflows/firmware.yml'
+  pull_request:
+    paths:
+      - 'firmware/**'
+      - '.github/workflows/firmware.yml'
+
+jobs:
+  build:
+    name: idf-build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # esp32c3 is the validated target. Others build to keep them green
+        # at the compile level until hardware arrives.
+        target: [esp32c3, esp32, esp32s3, esp32c6]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ESP-IDF build
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3
+          target: ${{ matrix.target }}
+          path: firmware
+
+      - name: Upload firmware artifact
+        if: github.ref_type == 'tag' || github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ambisense-${{ matrix.target }}-${{ github.sha }}
+          path: |
+            firmware/build/ambisense.bin
+            firmware/build/bootloader/bootloader.bin
+            firmware/build/partition_table/partition-table.bin
+          if-no-files-found: error
+          retention-days: 30
