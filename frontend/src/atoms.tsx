@@ -93,3 +93,128 @@ export function useRing(size: number, seed: number = 0) {
   const push = (v: number) => setBuf(b => [...b.slice(1), v]);
   return [buf, push] as const;
 }
+
+/* Number+Slider field used across LEDs and Motion screens. */
+export function NumberAndSlider({ label, value, onChange, min, max, step = 1, suffix = '' }: {
+  label: string; value: number; onChange: (v: number) => void; min: number; max: number; step?: number; suffix?: string;
+}) {
+  return (
+    <div>
+      <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+        <span class="field-label" style="margin-bottom: 0;">{label}</span>
+        <input type="number" value={value} min={min} max={max} step={step}
+          onChange={(e) => onChange(Math.max(min, Math.min(max, Number((e.target as HTMLInputElement).value))))}
+          style="width: 80px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; font-family: var(--font-mono); font-size: 12px; color: var(--text-0); text-align: right; outline: none;"/>
+      </div>
+      <input type="range" class="range" value={value} min={min} max={max} step={step}
+        onInput={(e) => onChange(Number((e.target as HTMLInputElement).value))}/>
+      {suffix && <div style="font-size: 10px; color: var(--text-3); text-align: right; margin-top: 2px;">{suffix}</div>}
+    </div>
+  );
+}
+
+/* Dual-handle range slider for the distance window. */
+export function DualHandleRange({ minVal, maxVal, onChange, min = 0, max = 500 }: {
+  minVal: number; maxVal: number; onChange: (v: { minVal: number; maxVal: number }) => void; min?: number; max?: number;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [drag, setDrag] = useState<'min' | 'max' | null>(null);
+  const handle = (e: PointerEvent) => {
+    if (!drag || !ref.current) return;
+    const rect = ref.current.getBoundingClientRect();
+    const t = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const v = Math.round(min + t * (max - min));
+    if (drag === 'min') onChange({ minVal: Math.min(v, maxVal - 5), maxVal });
+    else onChange({ minVal, maxVal: Math.max(v, minVal + 5) });
+  };
+  useEffect(() => {
+    if (!drag) return;
+    const up = () => setDrag(null);
+    window.addEventListener('pointermove', handle);
+    window.addEventListener('pointerup', up);
+    return () => { window.removeEventListener('pointermove', handle); window.removeEventListener('pointerup', up); };
+  }, [drag, minVal, maxVal]);
+  const tMin = (minVal - min) / (max - min);
+  const tMax = (maxVal - min) / (max - min);
+  return (
+    <div ref={ref} style="position: relative; height: 28px; padding: 12px 0; cursor: pointer; touch-action: none;">
+      <div style="position: absolute; left: 0; right: 0; top: 50%; height: 4px; background: var(--bg-3); border-radius: 999px;"/>
+      <div style={`position: absolute; top: 50%; height: 4px; transform: translateY(-2px); left: ${tMin*100}%; width: ${(tMax-tMin)*100}%; background: var(--acc-grad); border-radius: 999px;`}/>
+      <div onPointerDown={() => setDrag('min')} style={`position: absolute; top: 50%; left: calc(${tMin*100}% - 9px); transform: translateY(-50%); width: 18px; height: 18px; border-radius: 50%; background: var(--text-0); border: 3px solid var(--acc-orange); cursor: grab; box-shadow: var(--shadow-1);`}/>
+      <div onPointerDown={() => setDrag('max')} style={`position: absolute; top: 50%; left: calc(${tMax*100}% - 9px); transform: translateY(-50%); width: 18px; height: 18px; border-radius: 50%; background: var(--text-0); border: 3px solid var(--acc-orange); cursor: grab; box-shadow: var(--shadow-1);`}/>
+    </div>
+  );
+}
+
+/* SVG topology diagrams used by Mesh screen. */
+export function TopologyDiagram({ kind, size = 96 }: { kind: 'straight'|'l_shape'|'u_shape'|'custom'; size?: number }) {
+  const stroke = 'var(--text-2)';
+  const acc = 'var(--acc-orange)';
+  if (kind === 'straight') return (
+    <svg viewBox="0 0 100 60" width="100%" style={`height: ${size*0.6}px;`}>
+      <line x1="10" y1="30" x2="90" y2="30" stroke={stroke} stroke-width="2"/>
+      {[10, 50, 90].map((x, i) => <circle key={i} cx={x} cy="30" r="4" fill={acc}/>)}
+    </svg>
+  );
+  if (kind === 'l_shape') return (
+    <svg viewBox="0 0 100 100" width="100%" style={`height: ${size}px;`}>
+      <polyline points="20,20 20,80 80,80" stroke={stroke} stroke-width="2" fill="none"/>
+      {[[20,20],[20,50],[20,80],[50,80],[80,80]].map(([x,y], i) => <circle key={i} cx={x} cy={y} r="4" fill={acc}/>)}
+    </svg>
+  );
+  if (kind === 'u_shape') return (
+    <svg viewBox="0 0 100 100" width="100%" style={`height: ${size}px;`}>
+      <polyline points="15,20 15,80 85,80 85,20" stroke={stroke} stroke-width="2" fill="none"/>
+      {[[15,20],[15,50],[15,80],[50,80],[85,80],[85,50],[85,20]].map(([x,y], i) => <circle key={i} cx={x} cy={y} r="4" fill={acc}/>)}
+    </svg>
+  );
+  return (
+    <svg viewBox="0 0 100 100" width="100%" style={`height: ${size}px;`}>
+      <path d="M 15 30 Q 40 10 55 40 T 85 70" stroke={stroke} stroke-width="2" fill="none" stroke-dasharray="3 3"/>
+      {[[15,30],[40,22],[55,40],[70,52],[85,70]].map(([x,y], i) => <circle key={i} cx={x} cy={y} r="4" fill={acc}/>)}
+    </svg>
+  );
+}
+
+/* Two-line chart for Motion screen — raw vs smoothed distance. */
+export function LineChart({ raw, smooth, width = 600, height = 180 }: {
+  raw: number[]; smooth: number[]; width?: number; height?: number;
+}) {
+  const lo = 0, hi = 300;
+  const range = hi - lo;
+  const toPath = (data: number[]) => data.map((v, i) => {
+    const x = (i / Math.max(1, data.length - 1)) * width;
+    const y = height - ((v - lo) / range) * height;
+    return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  return (
+    <svg width="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={`display: block; height: ${height}px;`}>
+      {[0, 0.25, 0.5, 0.75, 1].map(t => (
+        <line key={t} x1="0" y1={height * t} x2={width} y2={height * t} stroke="var(--line-soft)" stroke-dasharray="2 4" stroke-width="1"/>
+      ))}
+      <path d={toPath(raw)} stroke="var(--text-3)" stroke-width="1" fill="none" opacity="0.7"/>
+      <path d={toPath(smooth)} stroke="var(--acc-orange)" stroke-width="2" fill="none" stroke-linecap="round"/>
+    </svg>
+  );
+}
+
+/* HSV ↔ RGB conversion for the color wheel. */
+export function hsv2rgb(h: number, s: number, v: number): [number, number, number] {
+  h = ((h % 360) + 360) % 360;
+  const c = v * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = v - c;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) [r, g, b] = [c, x, 0];
+  else if (h < 120) [r, g, b] = [x, c, 0];
+  else if (h < 180) [r, g, b] = [0, c, x];
+  else if (h < 240) [r, g, b] = [0, x, c];
+  else if (h < 300) [r, g, b] = [x, 0, c];
+  else [r, g, b] = [c, 0, x];
+  return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
+}
+export function rgb2hex(r: number, g: number, b: number) {
+  return '#' + [r, g, b].map(n => Math.max(0, Math.min(255, n)).toString(16).padStart(2, '0')).join('').toUpperCase();
+}
+export function hex2rgb(hex: string): [number, number, number] {
+  const h = hex.replace('#', '').padEnd(6, '0').slice(0, 6);
+  return [parseInt(h.slice(0,2), 16), parseInt(h.slice(2,4), 16), parseInt(h.slice(4,6), 16)];
+}

@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "esp_wifi.h"
+#include "nvs_flash.h"
 #include "esp_app_desc.h"
 #include "esp_system.h"
 #include "esp_idf_version.h"
@@ -283,6 +284,24 @@ static esp_err_t handle_system_post(httpd_req_t *req) {
     if (e) settings_set_u8("sys", "enabled", cJSON_IsTrue(e) ? 1 : 0);
     cJSON_Delete(j);
     return handle_system_get(req);
+}
+
+/* /api/factory_reset — erase NVS, then reboot. Used by System tab's
+ * "type-the-hostname" confirmation. */
+static void _factory_task(void *arg) {
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(500));
+    nvs_flash_erase();
+    esp_restart();
+}
+static esp_err_t handle_factory_reset(httpd_req_t *req) {
+    if (!gate_auth(req)) return ESP_OK;
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", true);
+    cJSON_AddStringToObject(r, "note", "erasing NVS and rebooting");
+    send_json(req, r);
+    xTaskCreate(_factory_task, "factory", 2048, NULL, 5, NULL);
+    return ESP_OK;
 }
 
 /* /api/reboot — schedule restart so the response can flush first. */
@@ -1030,6 +1049,7 @@ static const httpd_uri_t k_routes[] = {
     { "/api/reboot",                     HTTP_POST, handle_reboot,           NULL },
     { "/api/system",                     HTTP_GET,  handle_system_get,       NULL },
     { "/api/system",                     HTTP_POST, handle_system_post,      NULL },
+    { "/api/factory_reset",              HTTP_POST, handle_factory_reset,    NULL },
     { "/api/version",                    HTTP_GET,  handle_version,          NULL },
     { "/api/wifi/scan",                  HTTP_GET,  handle_wifi_scan,        NULL },
     { "/api/wifi",                       HTTP_GET,  handle_wifi_get,         NULL },
