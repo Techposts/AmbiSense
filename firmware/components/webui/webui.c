@@ -140,13 +140,31 @@ static esp_err_t handle_captive_redirect(httpd_req_t *req) {
 
 extern const uint8_t _binary_ui_html_gz_start[] asm("_binary_ui_html_gz_start");
 extern const uint8_t _binary_ui_html_gz_end[]   asm("_binary_ui_html_gz_end");
+extern const uint8_t _binary_ui_html_start[]    asm("_binary_ui_html_start");
+extern const uint8_t _binary_ui_html_end[]      asm("_binary_ui_html_end");
 
+/* Serve the embedded UI, sniffing Accept-Encoding so clients that don't
+ * advertise gzip support get the raw HTML. Some captive-portal detects and
+ * a small handful of mobile browser edge cases strip Accept-Encoding for
+ * private-network LAN requests; serving raw to those keeps the UI working. */
 static esp_err_t handle_root_real(httpd_req_t *req) {
+    char ae[80] = {0};
+    bool accepts_gzip = false;
+    if (httpd_req_get_hdr_value_str(req, "Accept-Encoding", ae, sizeof(ae)) == ESP_OK) {
+        accepts_gzip = (strstr(ae, "gzip") != NULL);
+    }
+
     httpd_resp_set_type(req, "text/html; charset=utf-8");
-    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
     httpd_resp_set_hdr(req, "Cache-Control", "max-age=300, public");
-    const size_t len = _binary_ui_html_gz_end - _binary_ui_html_gz_start;
-    return httpd_resp_send(req, (const char *)_binary_ui_html_gz_start, len);
+
+    if (accepts_gzip) {
+        httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+        const size_t len = _binary_ui_html_gz_end - _binary_ui_html_gz_start;
+        return httpd_resp_send(req, (const char *)_binary_ui_html_gz_start, len);
+    } else {
+        const size_t len = _binary_ui_html_end - _binary_ui_html_start;
+        return httpd_resp_send(req, (const char *)_binary_ui_html_start, len);
+    }
 }
 
 #define handle_root handle_root_real
@@ -221,6 +239,15 @@ static const char k_placeholder_html[] =
 "</script>\n"
 "</body></html>\n";
 #endif
+
+/* ============================================================
+ *  /api/ping  — tiny health-check; lets a stuck client confirm the
+ *  server is responsive even if HTML serving has gone wrong.
+ * ============================================================ */
+static esp_err_t handle_ping(httpd_req_t *req) {
+    httpd_resp_set_type(req, "text/plain");
+    return httpd_resp_send(req, "pong", 4);
+}
 
 /* ============================================================
  *  /api/version
@@ -905,6 +932,7 @@ static const httpd_uri_t k_routes[] = {
     { "/ncsi.txt",                       HTTP_GET,  handle_captive_redirect, NULL },
 
     /* API */
+    { "/api/ping",                       HTTP_GET,  handle_ping,             NULL },
     { "/api/version",                    HTTP_GET,  handle_version,          NULL },
     { "/api/wifi/scan",                  HTTP_GET,  handle_wifi_scan,        NULL },
     { "/api/wifi",                       HTTP_GET,  handle_wifi_get,         NULL },
