@@ -30,6 +30,8 @@
 #include "radar.h"
 #include "motion.h"
 #include "led_engine.h"
+#include "topology.h"
+#include "mesh.h"
 
 static const char *TAG = "ambisense";
 
@@ -78,18 +80,26 @@ static void apply_pin_overrides(board_profile_t *runtime) {
     }
 }
 
-/* Telemetry pump: 5 Hz publish smoothed target + RSSI to webui WS clients. */
+/* Telemetry pump: 5 Hz publish mesh-fused target + RSSI + peer health to
+ * webui WS clients. Falls back to local motion_get() if mesh has no peers. */
 static void telemetry_pump_task(void *arg) {
     (void)arg;
     while (1) {
-        target_t t;
-        motion_get(&t);
+        mesh_fused_t f;
+        mesh_get_fused(&f);
+        mesh_peer_t peers[MESH_MAX_PEERS];
+        size_t pn = mesh_peers_snapshot(peers, MESH_MAX_PEERS);
+        size_t hn = 0;
+        for (size_t i = 0; i < pn; ++i) if (peers[i].healthy) hn++;
+
         webui_live_t live = {
-            .distance_cm = t.distance_cm,
-            .direction   = t.direction,
+            .distance_cm = f.distance_cm,
+            .direction   = f.direction,
             .rssi        = netmgr_get_rssi(),
             .free_heap   = 0,   /* webui fills these in itself before broadcast */
             .uptime_s    = 0,
+            .peer_count   = (uint8_t)pn,
+            .peer_healthy = (uint8_t)hn,
         };
         webui_publish_live(&live);
         vTaskDelay(pdMS_TO_TICKS(200));
@@ -149,6 +159,11 @@ void app_main(void) {
     if (led_engine_init(runtime.led_pin) != ESP_OK) {
         ESP_LOGE(TAG, "led_engine_init on GPIO %u failed", runtime.led_pin);
     }
+
+    /* Topology + ESP-NOW peer mesh. Comes after netmgr because esp_now_init
+     * requires Wi-Fi started. */
+    topology_init();
+    if (mesh_init() != ESP_OK) ESP_LOGW(TAG, "mesh_init failed (single-device fallback)");
 
     xTaskCreate(telemetry_pump_task, "tele_pump", 3072, NULL, 3, NULL);
 

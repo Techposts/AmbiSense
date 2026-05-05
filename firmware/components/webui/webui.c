@@ -25,6 +25,8 @@
 #include "board.h"
 #include "led_engine.h"
 #include "radar.h"
+#include "topology.h"
+#include "mesh.h"
 
 static const char *TAG = "webui";
 
@@ -668,6 +670,130 @@ static esp_err_t handle_settings_post(httpd_req_t *req) {
 }
 
 /* ============================================================
+ *  /api/mesh — peers, fusion, pairing
+ * ============================================================ */
+static esp_err_t handle_mesh_get(httpd_req_t *req) {
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "coordinator", mesh_is_coordinator());
+    static const char *FUSE_NAMES[] = {"most_recent","slave_first","master_first","zone_based"};
+    cJSON_AddStringToObject(r, "fusion", FUSE_NAMES[mesh_get_fusion()]);
+
+    mesh_peer_t peers[MESH_MAX_PEERS];
+    size_t n = mesh_peers_snapshot(peers, MESH_MAX_PEERS);
+    cJSON *arr = cJSON_AddArrayToObject(r, "peers");
+    for (size_t i = 0; i < n; ++i) {
+        cJSON *o = cJSON_CreateObject();
+        char macstr[18];
+        snprintf(macstr, sizeof(macstr), "%02x:%02x:%02x:%02x:%02x:%02x",
+                 peers[i].mac[0], peers[i].mac[1], peers[i].mac[2],
+                 peers[i].mac[3], peers[i].mac[4], peers[i].mac[5]);
+        cJSON_AddStringToObject(o, "mac", macstr);
+        cJSON_AddNumberToObject(o, "distance_cm", peers[i].distance_cm);
+        cJSON_AddNumberToObject(o, "direction", peers[i].direction);
+        cJSON_AddNumberToObject(o, "rssi", peers[i].rssi);
+        cJSON_AddBoolToObject (o, "healthy", peers[i].healthy);
+        cJSON_AddItemToArray(arr, o);
+    }
+    return send_json(req, r);
+}
+
+static esp_err_t handle_mesh_post(httpd_req_t *req) {
+    if (!gate_auth(req)) return ESP_OK;
+    cJSON *j = read_body_json(req);
+    if (!j) return send_err(req, 400, "bad json");
+    cJSON *fuse = cJSON_GetObjectItem(j, "fusion");
+    if (fuse && cJSON_IsString(fuse)) {
+        mesh_fusion_t mode = MESH_FUSE_MOST_RECENT;
+        if      (strcmp(fuse->valuestring, "slave_first")  == 0) mode = MESH_FUSE_SLAVE_FIRST;
+        else if (strcmp(fuse->valuestring, "master_first") == 0) mode = MESH_FUSE_MASTER_FIRST;
+        else if (strcmp(fuse->valuestring, "zone_based")   == 0) mode = MESH_FUSE_ZONE_BASED;
+        mesh_set_fusion(mode);
+    }
+    cJSON *pair = cJSON_GetObjectItem(j, "pair");
+    if (pair && cJSON_IsTrue(pair)) mesh_open_pairing();
+    cJSON_Delete(j);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", true);
+    return send_json(req, r);
+}
+
+/* ============================================================
+ *  /api/topology
+ * ============================================================ */
+static esp_err_t handle_topology_get(httpd_req_t *req) {
+    const topology_t *t = topology_get();
+    cJSON *r = cJSON_CreateObject();
+    static const char *KIND_NAMES[] = {"straight","l_shape","u_shape","custom"};
+    cJSON_AddStringToObject(r, "kind", KIND_NAMES[t->kind <= TOPO_CUSTOM ? t->kind : 0]);
+    cJSON_AddNumberToObject(r, "version", t->version);
+    cJSON_AddNumberToObject(r, "total_leds", t->total_leds);
+    cJSON *arr = cJSON_AddArrayToObject(r, "segments");
+    for (uint8_t i = 0; i < t->segment_count; ++i) {
+        cJSON *o = cJSON_CreateObject();
+        char macstr[18];
+        snprintf(macstr, sizeof(macstr), "%02x:%02x:%02x:%02x:%02x:%02x",
+                 t->segments[i].mac[0], t->segments[i].mac[1], t->segments[i].mac[2],
+                 t->segments[i].mac[3], t->segments[i].mac[4], t->segments[i].mac[5]);
+        cJSON_AddStringToObject(o, "mac", macstr);
+        cJSON_AddNumberToObject(o, "led_start",   t->segments[i].led_start);
+        cJSON_AddNumberToObject(o, "led_end",     t->segments[i].led_end);
+        cJSON_AddNumberToObject(o, "dist_min_cm", t->segments[i].dist_min_cm);
+        cJSON_AddNumberToObject(o, "dist_max_cm", t->segments[i].dist_max_cm);
+        cJSON_AddBoolToObject (o, "reverse",      t->segments[i].reverse);
+        cJSON_AddItemToArray(arr, o);
+    }
+    return send_json(req, r);
+}
+
+static esp_err_t handle_topology_post(httpd_req_t *req) {
+    if (!gate_auth(req)) return ESP_OK;
+    cJSON *j = read_body_json(req);
+    if (!j) return send_err(req, 400, "bad json");
+
+    topology_t t = *topology_get();
+    cJSON *kind = cJSON_GetObjectItem(j, "kind");
+    if (kind && cJSON_IsString(kind)) {
+        if      (strcmp(kind->valuestring, "straight") == 0) t.kind = TOPO_STRAIGHT;
+        else if (strcmp(kind->valuestring, "l_shape")  == 0) t.kind = TOPO_L_SHAPE;
+        else if (strcmp(kind->valuestring, "u_shape")  == 0) t.kind = TOPO_U_SHAPE;
+        else if (strcmp(kind->valuestring, "custom")   == 0) t.kind = TOPO_CUSTOM;
+    }
+    cJSON *total = cJSON_GetObjectItem(j, "total_leds");
+    if (total && cJSON_IsNumber(total)) t.total_leds = (uint16_t)total->valueint;
+    cJSON *segs = cJSON_GetObjectItem(j, "segments");
+    if (segs && cJSON_IsArray(segs)) {
+        int n = cJSON_GetArraySize(segs);
+        if (n > TOPO_MAX_SEGMENTS) n = TOPO_MAX_SEGMENTS;
+        t.segment_count = (uint8_t)n;
+        for (int i = 0; i < n; ++i) {
+            cJSON *s = cJSON_GetArrayItem(segs, i);
+            if (!s) continue;
+            cJSON *mac = cJSON_GetObjectItem(s, "mac");
+            if (mac && cJSON_IsString(mac)) {
+                unsigned m[6];
+                if (sscanf(mac->valuestring, "%x:%x:%x:%x:%x:%x", &m[0],&m[1],&m[2],&m[3],&m[4],&m[5]) == 6) {
+                    for (int k = 0; k < 6; ++k) t.segments[i].mac[k] = (uint8_t)m[k];
+                }
+            }
+            cJSON *v;
+            v = cJSON_GetObjectItem(s, "led_start");   if (v && cJSON_IsNumber(v)) t.segments[i].led_start   = v->valueint;
+            v = cJSON_GetObjectItem(s, "led_end");     if (v && cJSON_IsNumber(v)) t.segments[i].led_end     = v->valueint;
+            v = cJSON_GetObjectItem(s, "dist_min_cm"); if (v && cJSON_IsNumber(v)) t.segments[i].dist_min_cm = v->valueint;
+            v = cJSON_GetObjectItem(s, "dist_max_cm"); if (v && cJSON_IsNumber(v)) t.segments[i].dist_max_cm = v->valueint;
+            v = cJSON_GetObjectItem(s, "reverse");     if (v) t.segments[i].reverse = cJSON_IsTrue(v) ? 1 : 0;
+        }
+    }
+    cJSON_Delete(j);
+    esp_err_t err = topology_set(&t, true);
+    if (err != ESP_OK) return send_err(req, 400, "invalid topology");
+    mesh_gossip_topology();
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", true);
+    cJSON_AddNumberToObject(r, "version", topology_get()->version);
+    return send_json(req, r);
+}
+
+/* ============================================================
  *  /api/distance + /api/live (WebSocket)
  * ============================================================ */
 static esp_err_t handle_distance(httpd_req_t *req) {
@@ -792,6 +918,10 @@ static const httpd_uri_t k_routes[] = {
     { "/api/settings",                   HTTP_GET,  handle_settings_get,     NULL },
     { "/api/settings",                   HTTP_POST, handle_settings_post,    NULL },
     { "/api/distance",                   HTTP_GET,  handle_distance,         NULL },
+    { "/api/mesh",                       HTTP_GET,  handle_mesh_get,         NULL },
+    { "/api/mesh",                       HTTP_POST, handle_mesh_post,        NULL },
+    { "/api/topology",                   HTTP_GET,  handle_topology_get,     NULL },
+    { "/api/topology",                   HTTP_POST, handle_topology_post,    NULL },
     { "/api/ota",                        HTTP_POST, handle_ota,              NULL },
 };
 
