@@ -57,6 +57,29 @@ void netmgr_on_state_change(netmgr_state_cb_t cb, void *ctx);
 /* Set device hostname (lower-case, alnum/hyphen). Persists to NVS. */
 esp_err_t netmgr_set_hostname(const char *name);
 
+/* AP visibility policy.
+ *   AUTO    — AP up only while STA is not connected (default).
+ *   ALWAYS  — AP up at all times (use if you want a guaranteed local
+ *             access path even when joined to a router).
+ *   STA_ONLY — Once STA connects, AP comes down and stays down until
+ *              STA loses connection. Same as AUTO but spelled-out for clarity.
+ */
+typedef enum {
+    NETMGR_AP_AUTO     = 0,
+    NETMGR_AP_ALWAYS   = 1,
+    NETMGR_AP_STA_ONLY = 2,
+} netmgr_ap_mode_t;
+
+netmgr_ap_mode_t netmgr_get_ap_mode(void);
+esp_err_t        netmgr_set_ap_mode(netmgr_ap_mode_t mode);
+
+/* Whether the AP interface is currently broadcasting. */
+bool netmgr_is_ap_active(void);
+
+/* Set AP password (>= 8 chars enables WPA2; empty/short = open).
+ * Persists to NVS; takes effect after next netmgr_init or restart. */
+esp_err_t netmgr_set_ap_password(const char *pass);
+
 #ifdef __cplusplus
 }
 #endif

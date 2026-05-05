@@ -38,8 +38,48 @@ static struct {
     char hostname[33];
     bool inited;
     bool dns_running;
+    bool ap_active;        /* true while we are broadcasting an SSID */
+    bool sta_configured;   /* true if NVS has stored creds */
+    netmgr_ap_mode_t ap_mode;
     TaskHandle_t dns_task;
 } s_net;
+
+/* Decide whether the AP interface should be on right now.
+ *   AUTO / STA_ONLY: AP up unless STA is currently connected.
+ *   ALWAYS:           AP up unconditionally.
+ *   No STA configured at all: AP up regardless of mode (otherwise the
+ *                             user has no way to reach the device). */
+static bool ap_should_be_on(void) {
+    if (!s_net.sta_configured) return true;
+    if (s_net.ap_mode == NETMGR_AP_ALWAYS) return true;
+    return s_net.state != NETMGR_STATE_STA_CONNECTED;
+}
+
+/* Forward decls used in transition helpers below */
+static esp_err_t configure_ap(void);
+static void start_captive_dns(void);
+static void stop_captive_dns_now(void);
+
+/* Switch the radio to APSTA / STA_ONLY without restarting Wi-Fi.
+ * `target_ap_on` is what we want; we pick the IDF mode accordingly. */
+static void apply_ap_state(bool target_ap_on) {
+    if (target_ap_on == s_net.ap_active) return;
+    wifi_mode_t want = target_ap_on ? WIFI_MODE_APSTA : WIFI_MODE_STA;
+    esp_err_t err = esp_wifi_set_mode(want);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_set_mode(%d) failed: 0x%x", want, err);
+        return;
+    }
+    if (target_ap_on) {
+        configure_ap();
+        start_captive_dns();
+        ESP_LOGI(TAG, "AP brought up (mode=%d)", s_net.ap_mode);
+    } else {
+        stop_captive_dns_now();
+        ESP_LOGI(TAG, "AP brought down (STA owns the radio)");
+    }
+    s_net.ap_active = target_ap_on;
+}
 
 #define EVT_GOT_IP   BIT0
 #define EVT_FAIL     BIT1
@@ -155,24 +195,41 @@ static void start_captive_dns(void) {
     xTaskCreate(dns_task, "captive_dns", 3072, NULL, 3, &s_net.dns_task);
 }
 
+static void stop_captive_dns_now(void) {
+    /* The dns_task observes s_net.dns_running and exits at next packet/recv
+     * timeout. We don't force-kill the task; it self-terminates. */
+    s_net.dns_running = false;
+}
+
 static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        bool was_connected = (s_net.state == NETMGR_STATE_STA_CONNECTED);
+        s_net.state = NETMGR_STATE_STA_CONNECTING;
+        if (was_connected) {
+            ESP_LOGW(TAG, "STA dropped after being connected — bringing AP back up while we retry");
+            apply_ap_state(ap_should_be_on());
+        }
         if (s_net.sta_retry < STA_RETRY_MAX) {
             s_net.sta_retry++;
             ESP_LOGW(TAG, "STA disconnected; retry %d/%d", s_net.sta_retry, STA_RETRY_MAX);
             vTaskDelay(pdMS_TO_TICKS(STA_RETRY_BACKOFF_MS));
             esp_wifi_connect();
         } else {
-            ESP_LOGW(TAG, "STA failed after %d retries; falling back to AP", STA_RETRY_MAX);
+            ESP_LOGW(TAG, "STA failed after %d retries; AP fallback active", STA_RETRY_MAX);
             xEventGroupSetBits(s_net.evt, EVT_FAIL);
+            s_net.state = NETMGR_STATE_AP_FALLBACK;
+            apply_ap_state(true);  /* No matter the mode, fail-soft to AP. */
         }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
         ESP_LOGI(TAG, "STA got IP: " IPSTR, IP2STR(&e->ip_info.ip));
         s_net.sta_retry = 0;
+        s_net.state = NETMGR_STATE_STA_CONNECTED;
         xEventGroupSetBits(s_net.evt, EVT_GOT_IP);
+        /* AUTO/STA_ONLY: power down the AP now that STA is up. ALWAYS: keep it. */
+        apply_ap_state(ap_should_be_on());
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
         wifi_event_ap_staconnected_t *e = (wifi_event_ap_staconnected_t *)data;
         ESP_LOGI(TAG, "AP client joined: " MACSTR, MAC2STR(e->mac));
@@ -251,17 +308,27 @@ esp_err_t netmgr_init(void) {
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &on_wifi_event, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &on_wifi_event, NULL));
 
-    /* AP+STA always-on. AP serves the web UI for direct connect (no router
-     * needed), and ESP-NOW peers find each other on the AP channel. STA is
-     * additive: if creds are saved, we also join the user's router. */
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
-    configure_ap();
+    /* Read AP-mode policy from NVS; default AUTO (AP only when STA is
+     * down, or always when no STA configured). */
+    uint8_t apmode = NETMGR_AP_AUTO;
+    settings_get_u8("wifi", "ap_mode", &apmode);
+    if (apmode > NETMGR_AP_STA_ONLY) apmode = NETMGR_AP_AUTO;
+    s_net.ap_mode = (netmgr_ap_mode_t)apmode;
 
     char ssid[33] = {0}, pass[65] = {0};
     settings_get_wifi_ssid(ssid, sizeof(ssid));
     settings_get_wifi_pass(pass, sizeof(pass));
-    bool have_sta_creds = ssid[0] != 0;
-    if (have_sta_creds) {
+    s_net.sta_configured = ssid[0] != 0;
+
+    /* Decide initial mode. If we have STA creds, start in APSTA so STA
+     * can come up while AP is reachable; the AP will be torn down by
+     * the IP_EVENT_STA_GOT_IP handler if policy allows. If no creds,
+     * AP-only is the right answer. */
+    bool ap_at_boot = ap_should_be_on();
+    ESP_ERROR_CHECK(esp_wifi_set_mode(ap_at_boot ? WIFI_MODE_APSTA : WIFI_MODE_STA));
+    if (ap_at_boot) configure_ap();
+
+    if (s_net.sta_configured) {
         configure_sta(ssid, pass);
         s_net.sta_retry = 0;
         xEventGroupClearBits(s_net.evt, EVT_GOT_IP | EVT_FAIL);
@@ -271,26 +338,61 @@ esp_err_t netmgr_init(void) {
     }
 
     ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_LOGI(TAG, "Wi-Fi up: AP%s%s", have_sta_creds ? "+STA (joining " : " only", have_sta_creds ? ssid : "");
-    if (have_sta_creds) ESP_LOGI(TAG, "STA: trying %s", ssid);
+    s_net.ap_active = ap_at_boot;
+    ESP_LOGI(TAG, "Wi-Fi up: ap=%s sta=%s host=%s mode=%s",
+             ap_at_boot ? "yes" : "no",
+             s_net.sta_configured ? ssid : "(none)",
+             s_net.hostname,
+             s_net.ap_mode == NETMGR_AP_ALWAYS ? "always" :
+             s_net.ap_mode == NETMGR_AP_STA_ONLY ? "sta_only" : "auto");
 
-    /* Captive DNS responder runs on AP interface — always up so phones
-     * connecting to AmbiSense-XXXX get auto-popped to the setup page,
-     * regardless of STA state. */
-    start_captive_dns();
+    if (ap_at_boot) start_captive_dns();
     bring_up_mdns();
 
-    /* Wait briefly for STA to either connect or fail; either way, the AP
-     * remains available so this never blocks the device from being usable. */
-    if (have_sta_creds) {
+    /* If we tried STA, wait briefly so callers see a settled state. */
+    if (s_net.sta_configured) {
         EventBits_t bits = xEventGroupWaitBits(
             s_net.evt, EVT_GOT_IP | EVT_FAIL, pdFALSE, pdFALSE,
             pdMS_TO_TICKS(15000));
-        if (bits & EVT_GOT_IP) notify_state(NETMGR_STATE_STA_CONNECTED);
-        else                   notify_state(NETMGR_STATE_AP_FALLBACK);
+        if (bits & EVT_GOT_IP) {
+            /* event handler already adjusted AP state per policy */
+        } else {
+            notify_state(NETMGR_STATE_AP_FALLBACK);
+            apply_ap_state(true);  /* AP is the user's only way back in */
+        }
     }
 
     s_net.inited = true;
+    return ESP_OK;
+}
+
+netmgr_ap_mode_t netmgr_get_ap_mode(void) {
+    return s_net.ap_mode;
+}
+
+esp_err_t netmgr_set_ap_mode(netmgr_ap_mode_t mode) {
+    if (mode > NETMGR_AP_STA_ONLY) return ESP_ERR_INVALID_ARG;
+    s_net.ap_mode = mode;
+    settings_set_u8("wifi", "ap_mode", (uint8_t)mode);
+    /* Apply immediately so the user sees the effect without a reboot. */
+    apply_ap_state(ap_should_be_on());
+    ESP_LOGI(TAG, "AP mode set to %s", mode == NETMGR_AP_ALWAYS ? "always" :
+                                       mode == NETMGR_AP_STA_ONLY ? "sta_only" : "auto");
+    return ESP_OK;
+}
+
+bool netmgr_is_ap_active(void) {
+    return s_net.ap_active;
+}
+
+esp_err_t netmgr_set_ap_password(const char *pass) {
+    if (!pass) pass = "";
+    settings_set_str("wifi", "ap_pass", pass);
+    /* If AP is currently up, re-apply config so new password takes effect. */
+    if (s_net.ap_active) {
+        configure_ap();
+        ESP_LOGI(TAG, "AP password updated; re-applied to running AP");
+    }
     return ESP_OK;
 }
 

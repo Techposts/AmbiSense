@@ -1,0 +1,118 @@
+#include "radar.h"
+
+#include <string.h>
+
+#include "esp_log.h"
+#include "driver/uart.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+
+#include "settings.h"
+
+static const char *TAG = "radar";
+
+/* Driver function table — each driver implements parse(buf, len) → frame. */
+typedef struct {
+    const char *id;
+    /* Read up to len bytes from UART; on a complete frame, fill out and
+     * return number of bytes consumed (>= 1). On partial frame return 0. */
+    size_t (*parse)(const uint8_t *buf, size_t len, radar_frame_t *out);
+} radar_driver_t;
+
+/* Forward decls — drivers live in radar_<kind>.c */
+extern size_t radar_ld2410_parse(const uint8_t *buf, size_t len, radar_frame_t *out);
+extern size_t radar_ld2450_parse(const uint8_t *buf, size_t len, radar_frame_t *out);
+extern size_t radar_sim_parse   (const uint8_t *buf, size_t len, radar_frame_t *out);
+
+static const radar_driver_t k_drivers[] = {
+    { "ld2410", radar_ld2410_parse },
+    { "ld2412", radar_ld2410_parse },  /* same family/protocol */
+    { "ld2420", radar_ld2410_parse },  /* presence subset */
+    { "ld2450", radar_ld2450_parse },
+    { "sim",    radar_sim_parse    },
+};
+
+static struct {
+    const radar_driver_t *drv;
+    QueueHandle_t q;
+    radar_config_t cfg;
+    bool inited;
+} s_radar;
+
+static const radar_driver_t *find_driver(const char *id) {
+    for (size_t i = 0; i < sizeof(k_drivers)/sizeof(k_drivers[0]); ++i) {
+        if (strcmp(k_drivers[i].id, id) == 0) return &k_drivers[i];
+    }
+    return NULL;
+}
+
+static void radar_task(void *arg) {
+    (void)arg;
+    static uint8_t rx[512];
+    size_t held = 0;
+    while (1) {
+        if (held >= sizeof(rx)) {
+            /* Buffer wedged — discard half to keep parsing forward-progress. */
+            memmove(rx, rx + sizeof(rx)/2, sizeof(rx)/2);
+            held = sizeof(rx)/2;
+        }
+        int n = uart_read_bytes(s_radar.cfg.uart_num, rx + held,
+                                sizeof(rx) - held, pdMS_TO_TICKS(50));
+        if (n > 0) held += n;
+
+        radar_frame_t frame = {0};
+        size_t consumed = s_radar.drv->parse(rx, held, &frame);
+        if (consumed > 0) {
+            xQueueOverwrite(s_radar.q, &frame);
+            if (consumed < held) memmove(rx, rx + consumed, held - consumed);
+            held -= consumed;
+        }
+    }
+}
+
+esp_err_t radar_init(const radar_config_t *cfg) {
+    if (s_radar.inited) return ESP_OK;
+
+    char kind[16] = {0};
+    if (settings_get_radar_kind(kind, sizeof(kind)) != ESP_OK || !kind[0]) {
+        snprintf(kind, sizeof(kind), "ld2450");  /* user has this on bench */
+    }
+    s_radar.drv = find_driver(kind);
+    if (!s_radar.drv) {
+        ESP_LOGE(TAG, "Unknown radar kind '%s'", kind);
+        return ESP_ERR_INVALID_ARG;
+    }
+    ESP_LOGI(TAG, "Radar driver: %s (uart%u, rx=%u, tx=%u, baud=%lu)",
+             s_radar.drv->id, cfg->uart_num, cfg->rx_pin, cfg->tx_pin,
+             (unsigned long)cfg->baud);
+
+    s_radar.cfg = *cfg;
+    s_radar.q = xQueueCreate(1, sizeof(radar_frame_t));
+
+    /* The simulator driver doesn't need UART at all. */
+    if (strcmp(s_radar.drv->id, "sim") != 0) {
+        const uart_config_t uc = {
+            .baud_rate = cfg->baud ? cfg->baud : 256000,
+            .data_bits = UART_DATA_8_BITS,
+            .parity = UART_PARITY_DISABLE,
+            .stop_bits = UART_STOP_BITS_1,
+            .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+            .source_clk = UART_SCLK_DEFAULT,
+        };
+        ESP_ERROR_CHECK(uart_driver_install(cfg->uart_num, 1024, 0, 0, NULL, 0));
+        ESP_ERROR_CHECK(uart_param_config(cfg->uart_num, &uc));
+        ESP_ERROR_CHECK(uart_set_pin(cfg->uart_num, cfg->tx_pin, cfg->rx_pin,
+                                     UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    }
+
+    xTaskCreate(radar_task, "radar", 4096, NULL, 6, NULL);
+    s_radar.inited = true;
+    return ESP_OK;
+}
+
+esp_err_t radar_read(radar_frame_t *out, TickType_t timeout) {
+    if (!s_radar.inited) return ESP_ERR_INVALID_STATE;
+    if (xQueueReceive(s_radar.q, out, timeout) != pdTRUE) return ESP_ERR_TIMEOUT;
+    return ESP_OK;
+}

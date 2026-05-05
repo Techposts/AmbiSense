@@ -23,6 +23,8 @@
 #include "netmgr.h"
 #include "ota.h"
 #include "board.h"
+#include "led_engine.h"
+#include "radar.h"
 
 static const char *TAG = "webui";
 
@@ -290,17 +292,59 @@ static void wifi_apply_task(void *arg) {
     vTaskDelete(NULL);
 }
 
+static esp_err_t handle_wifi_get(httpd_req_t *req) {
+    cJSON *r = cJSON_CreateObject();
+    char ssid[33] = {0};
+    settings_get_wifi_ssid(ssid, sizeof(ssid));
+    cJSON_AddStringToObject(r, "ssid", ssid);
+    cJSON_AddBoolToObject (r, "sta_configured", ssid[0] != 0);
+    cJSON_AddBoolToObject (r, "sta_connected", netmgr_is_sta_connected());
+    cJSON_AddBoolToObject (r, "ap_active", netmgr_is_ap_active());
+    netmgr_ap_mode_t m = netmgr_get_ap_mode();
+    cJSON_AddStringToObject(r, "ap_mode",
+        m == NETMGR_AP_ALWAYS ? "always" :
+        m == NETMGR_AP_STA_ONLY ? "sta_only" : "auto");
+    cJSON_AddNumberToObject(r, "rssi", netmgr_get_rssi());
+    char ip[32] = {0}, host[33] = {0};
+    netmgr_get_ip(ip, sizeof(ip));
+    netmgr_get_hostname(host, sizeof(host));
+    cJSON_AddStringToObject(r, "ip", ip);
+    cJSON_AddStringToObject(r, "hostname", host);
+    return send_json(req, r);
+}
+
 static esp_err_t handle_wifi_post(httpd_req_t *req) {
     if (!gate_auth(req)) return ESP_OK;
     cJSON *j = read_body_json(req);
     if (!j) return send_err(req, 400, "bad json");
 
-    cJSON *ssid = cJSON_GetObjectItem(j, "ssid");
-    cJSON *pass = cJSON_GetObjectItem(j, "pass");
+    /* Optional sub-settings — applied independently of ssid change. */
     cJSON *host = cJSON_GetObjectItem(j, "hostname");
     if (host && cJSON_IsString(host) && host->valuestring[0]) {
         netmgr_set_hostname(host->valuestring);
     }
+    cJSON *apmode = cJSON_GetObjectItem(j, "ap_mode");
+    if (apmode && cJSON_IsString(apmode)) {
+        netmgr_ap_mode_t m = NETMGR_AP_AUTO;
+        if      (strcmp(apmode->valuestring, "always")   == 0) m = NETMGR_AP_ALWAYS;
+        else if (strcmp(apmode->valuestring, "sta_only") == 0) m = NETMGR_AP_STA_ONLY;
+        netmgr_set_ap_mode(m);
+    }
+    cJSON *appass = cJSON_GetObjectItem(j, "ap_password");
+    if (appass && cJSON_IsString(appass)) {
+        netmgr_set_ap_password(appass->valuestring);
+    }
+    cJSON *clear = cJSON_GetObjectItem(j, "forget_sta");
+    if (clear && cJSON_IsTrue(clear)) {
+        netmgr_set_credentials(NULL, NULL);
+        cJSON_Delete(j);
+        cJSON *r = cJSON_CreateObject();
+        cJSON_AddStringToObject(r, "status", "STA cleared; AP up for re-setup");
+        return send_json(req, r);
+    }
+
+    cJSON *ssid = cJSON_GetObjectItem(j, "ssid");
+    cJSON *pass = cJSON_GetObjectItem(j, "pass");
     if (ssid && cJSON_IsString(ssid) && ssid->valuestring[0]) {
         const char *p = (pass && cJSON_IsString(pass)) ? pass->valuestring : "";
 
@@ -317,8 +361,12 @@ static esp_err_t handle_wifi_post(httpd_req_t *req) {
         xTaskCreate(wifi_apply_task, "wifi_apply", 4096, a, 4, NULL);
         return ESP_OK;
     }
+    /* No ssid in request — caller is just updating sub-settings (ap_mode,
+     * ap_password, hostname). That's a valid no-op for the STA side. */
     cJSON_Delete(j);
-    return send_err(req, 400, "ssid required");
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddStringToObject(r, "status", "ok");
+    return send_json(req, r);
 }
 
 /* ============================================================
@@ -599,6 +647,8 @@ static esp_err_t handle_settings_post(httpd_req_t *req) {
         }
     }
     cJSON_Delete(j);
+    /* Push LED-engine settings live without reboot. */
+    led_engine_reload();
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "ok", true);
     cJSON_AddNumberToObject(r, "updated", updated);
@@ -719,6 +769,7 @@ static const httpd_uri_t k_routes[] = {
     /* API */
     { "/api/version",                    HTTP_GET,  handle_version,          NULL },
     { "/api/wifi/scan",                  HTTP_GET,  handle_wifi_scan,        NULL },
+    { "/api/wifi",                       HTTP_GET,  handle_wifi_get,         NULL },
     { "/api/wifi",                       HTTP_POST, handle_wifi_post,        NULL },
     { "/api/auth/login",                 HTTP_POST, handle_login,            NULL },
     { "/api/auth/logout",                HTTP_POST, handle_logout,           NULL },

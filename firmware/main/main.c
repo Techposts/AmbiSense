@@ -27,6 +27,9 @@
 #include "auth.h"
 #include "webui.h"
 #include "ota.h"
+#include "radar.h"
+#include "motion.h"
+#include "led_engine.h"
 
 static const char *TAG = "ambisense";
 
@@ -75,6 +78,24 @@ static void apply_pin_overrides(board_profile_t *runtime) {
     }
 }
 
+/* Telemetry pump: 5 Hz publish smoothed target + RSSI to webui WS clients. */
+static void telemetry_pump_task(void *arg) {
+    (void)arg;
+    while (1) {
+        target_t t;
+        motion_get(&t);
+        webui_live_t live = {
+            .distance_cm = t.distance_cm,
+            .direction   = t.direction,
+            .rssi        = netmgr_get_rssi(),
+            .free_heap   = 0,   /* webui fills these in itself before broadcast */
+            .uptime_s    = 0,
+        };
+        webui_publish_live(&live);
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+}
+
 static void log_chip_info(void) {
     esp_chip_info_t chip;
     esp_chip_info(&chip);
@@ -113,6 +134,23 @@ void app_main(void) {
     auth_init();
     netmgr_init();
     webui_init();
+
+    /* Radar + motion smoother + LED engine. The render task pulls smoothed
+     * targets from motion_q and drives the strip at 60 Hz; the radar task
+     * parses UART frames; the motion task runs the PI smoother in between. */
+    radar_config_t rcfg = {
+        .uart_num = runtime.uart_num,
+        .rx_pin   = runtime.radar_rx_pin,
+        .tx_pin   = runtime.radar_tx_pin,
+        .baud     = 256000,
+    };
+    if (radar_init(&rcfg) != ESP_OK) ESP_LOGW(TAG, "radar_init failed (continuing)");
+    motion_init();
+    if (led_engine_init(runtime.led_pin) != ESP_OK) {
+        ESP_LOGE(TAG, "led_engine_init on GPIO %u failed", runtime.led_pin);
+    }
+
+    xTaskCreate(telemetry_pump_task, "tele_pump", 3072, NULL, 3, NULL);
 
     /* If we're running on a freshly-flashed image with rollback armed, mark
      * us valid so the bootloader doesn't revert on next reset. */
