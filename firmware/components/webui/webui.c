@@ -961,7 +961,7 @@ static esp_err_t handle_ws(httpd_req_t *req) {
 static void ws_broadcast_task(void *arg) {
     (void)arg;
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(200));  /* 5 Hz */
+        vTaskDelay(pdMS_TO_TICKS(50));  /* 20 Hz — smooth UI updates */
 
         webui_live_t snap;
         xSemaphoreTake(s_web.lock, portMAX_DELAY);
@@ -971,10 +971,10 @@ static void ws_broadcast_task(void *arg) {
         snap.rssi = netmgr_get_rssi();
         xSemaphoreGive(s_web.lock);
 
-        char json[160];
+        char json[200];
         int n = snprintf(json, sizeof(json),
-            "{\"distance\":%d,\"direction\":%d,\"rssi\":%d,\"heap\":%" PRIu32 ",\"uptime\":%" PRIu32 ",\"peers\":%u,\"healthy\":%u}",
-            snap.distance_cm, snap.direction, snap.rssi,
+            "{\"distance\":%d,\"raw\":%d,\"direction\":%d,\"rssi\":%d,\"heap\":%" PRIu32 ",\"uptime\":%" PRIu32 ",\"peers\":%u,\"healthy\":%u}",
+            snap.distance_cm, snap.raw_cm, snap.direction, snap.rssi,
             snap.free_heap, snap.uptime_s, snap.peer_count, snap.peer_healthy);
 
         httpd_ws_frame_t f = {

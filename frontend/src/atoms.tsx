@@ -218,3 +218,60 @@ export function hex2rgb(hex: string): [number, number, number] {
   const h = hex.replace('#', '').padEnd(6, '0').slice(0, 6);
   return [parseInt(h.slice(0,2), 16), parseInt(h.slice(2,4), 16), parseInt(h.slice(4,6), 16)];
 }
+
+/* Animated logo mark — triangle "A" with concentric pulse rings.
+ * Pulse intensity scales with proximity (closer target = brighter).
+ * Faithful port of frontend/design-source/project/app.jsx LogoMark. */
+export function LogoMark({ size = 36, distance = 0 }: { size?: number; distance?: number }) {
+  const pulseStrength = Math.max(0.2, Math.min(1, (250 - distance) / 200));
+  return (
+    <div style={`position: relative; width: ${size}px; height: ${size}px; flex-shrink: 0;`}>
+      <div style={`position: absolute; inset: -${size * 0.25}px; border-radius: 50%; background: radial-gradient(circle, rgba(255,122,61,0.35) 0%, rgba(255,61,130,0.15) 35%, transparent 65%); filter: blur(6px); opacity: ${0.6 * pulseStrength}; pointer-events: none; animation: logo-breath 2.6s ease-in-out infinite;`}/>
+      <svg viewBox="0 0 48 48" width={size} height={size} style="position: relative; display: block;">
+        <defs>
+          <linearGradient id="lm-grad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="var(--acc-amber)"/>
+            <stop offset="50%" stop-color="var(--acc-orange)"/>
+            <stop offset="100%" stop-color="var(--acc-pink)"/>
+          </linearGradient>
+          <radialGradient id="lm-core" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0%" stop-color="#FFE4B0"/>
+            <stop offset="60%" stop-color="var(--acc-orange)"/>
+            <stop offset="100%" stop-color="var(--acc-pink)"/>
+          </radialGradient>
+        </defs>
+        <rect x="1" y="1" width="46" height="46" rx="12" fill="#0a0c0f" stroke="url(#lm-grad)" stroke-width="1" opacity="0.55"/>
+        <g style="transform-origin: 24px 32px;">
+          {[0, 1, 2].map(i => (
+            <circle cx="24" cy="32" r="6" fill="none" stroke="url(#lm-grad)" stroke-width="1.2" opacity="0.7"
+              style={`animation: logo-pulse 2.2s ease-out infinite; animation-delay: ${i * 0.6}s; transform-origin: 24px 32px;`}/>
+          ))}
+        </g>
+        <path d="M 24 11 L 13 32 L 35 32 Z" fill="url(#lm-grad)" opacity="0.95"/>
+        <path d="M 24 18 L 18 30 L 30 30 Z" fill="#0a0c0f"/>
+        <circle cx="24" cy="32" r="2.6" fill="url(#lm-core)"/>
+        <circle cx="24" cy="32" r="1.1" fill="white" opacity="0.9"/>
+        {[[6,6],[42,6],[6,42],[42,42]].map(([x,y]) => (
+          <circle cx={x} cy={y} r="0.8" fill="var(--text-3)" opacity="0.5"/>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+/* Wordmark with gradient "Sense" — paired with LogoMark in sidebar/header. */
+export function Wordmark({ font = 16, sub = 10, mono = false, version, target }: {
+  font?: number; sub?: number; mono?: boolean; version?: string; target?: string;
+}) {
+  if (mono) return null;
+  return (
+    <div style="display: flex; flex-direction: column; line-height: 1.05;">
+      <span style={`font-size: ${font}px; font-weight: 600; letter-spacing: -0.025em; background: linear-gradient(180deg, var(--text-0) 0%, var(--text-1) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;`}>
+        Ambi<span style="background: var(--acc-grad); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; font-weight: 600;">Sense</span>
+      </span>
+      <span class="mono" style={`font-size: ${sub}px; color: var(--text-3); letter-spacing: 0.08em; text-transform: uppercase; margin-top: 2px;`}>
+        {version || ''} <span style="color: var(--text-4);">·</span> {target || ''}
+      </span>
+    </div>
+  );
+}

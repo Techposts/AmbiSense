@@ -178,6 +178,38 @@ input, select, textarea { font: inherit; color: inherit; }
 .toast.err { border-color: rgba(255,84,112,.4); color: var(--err); }
 
 @keyframes fade-up { from { opacity: 0; transform: translate(-50%, 6px); } to { opacity: 1; transform: translate(-50%, 0); } }
+@keyframes pulse-acc { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+@keyframes logo-pulse {
+  0%   { r: 4;  opacity: 0.9; stroke-width: 1.4; }
+  70%  { r: 18; opacity: 0;   stroke-width: 0.4; }
+  100% { r: 18; opacity: 0; }
+}
+@keyframes logo-breath {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.08); }
+}
+
+/* App shell — sticky header bar + sidebar with logo + bottom IP chip */
+.app-header {
+  position: sticky; top: 0; z-index: 50;
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 24px;
+  background: color-mix(in srgb, var(--bg-0) 88%, transparent);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+.brand-block {
+  display: flex; align-items: center; gap: 12px;
+  padding: 4px 6px 16px;
+}
+.sidebar-foot {
+  padding: 10px 12px; font-size: 10px; color: var(--text-3); line-height: 1.5;
+  border-top: 1px solid var(--line-soft); margin-top: 6px;
+}
+.btn-icon { padding: 8px; }
+@media (max-width: 760px) {
+  .app-header { padding: 10px 14px; }
+}
 @keyframes pulse  { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
 
 .led-canvas {

@@ -51,9 +51,15 @@ export function ScreenLive({ live, version, settings, setToast }: AppState) {
   const minD = settings.min_distance ?? 30;
   const maxD = settings.max_distance ?? 300;
   const inWindow = dist >= minD && dist <= maxD;
+  /* Push a sample on EVERY live update (now 20 Hz) instead of only when
+   * the integer cm value changes. Otherwise the sparkline freezes during
+   * stationary-but-real-time periods, which looks broken. */
   const histRef = useRef<number[]>(Array(80).fill(0));
   const [hist, setHist] = useState<number[]>(histRef.current);
-  useEffect(() => { histRef.current = [...histRef.current.slice(1), dist]; setHist(histRef.current); }, [dist]);
+  useEffect(() => {
+    histRef.current = [...histRef.current.slice(1), dist];
+    setHist(histRef.current);
+  }, [live]);
 
   const [sysEn, setSysEn] = useState<boolean>(true);
   useEffect(() => { getJSON('/api/system').then(r => setSysEn(!!r.enabled)).catch(() => {}); }, []);
@@ -325,21 +331,22 @@ export function ScreenMotion({ settings, live, reload, setToast }: AppState) {
     catch (e: any) { setToast(e.message || 'Save failed', 'err'); }
   };
 
-  /* Build raw + smoothed history from the live distance feed. */
+  /* Both buffers come straight from the firmware now (raw_cm + distance_cm
+   * over WS at 20 Hz). No more client-side alpha simulation — the chart
+   * shows what the firmware *actually* feeds the LED engine. Removes
+   * the visible 200 ms client-side lag. */
   const rawRef = useRef<number[]>(Array(80).fill(0));
   const smoothRef = useRef<number[]>(Array(80).fill(0));
   const [raw, setRaw] = useState(rawRef.current);
   const [smooth, setSmooth] = useState(smoothRef.current);
   useEffect(() => {
-    const r = live.distance;
+    const r = (live as any).raw ?? live.distance;
+    const sm = live.distance;
     rawRef.current = [...rawRef.current.slice(1), r];
-    const lastS = smoothRef.current[smoothRef.current.length - 1] || r;
-    const alpha = (s.pos_smooth_x1k ?? 200) / 1000;
-    const sm = lastS + (r - lastS) * alpha;
     smoothRef.current = [...smoothRef.current.slice(1), sm];
     setRaw([...rawRef.current]);
     setSmooth([...smoothRef.current]);
-  }, [live.distance]);
+  }, [live]);
 
   const enabled = !!s.motion_enabled;
 

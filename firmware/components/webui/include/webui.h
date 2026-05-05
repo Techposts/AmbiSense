@@ -27,8 +27,11 @@ esp_err_t webui_init(void);
  * Updates are coalesced and emitted to all connected /api/live WS
  * clients at ~5 Hz. */
 typedef struct {
-    int16_t distance_cm;
-    int8_t  direction;        /* -1, 0, +1 */
+    int16_t distance_cm;       /* smoothed + predicted */
+    int16_t raw_cm;            /* median-filtered but un-smoothed; lets the
+                                * Motion screen draw raw vs smoothed without
+                                * a second NVS round-trip */
+    int8_t  direction;         /* -1, 0, +1 */
     int8_t  rssi;
     uint32_t free_heap;
     uint32_t uptime_s;

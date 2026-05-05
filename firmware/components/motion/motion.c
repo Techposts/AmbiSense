@@ -1,6 +1,7 @@
 #include "motion.h"
 
 #include <string.h>
+#include <math.h>
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -14,6 +15,8 @@
 static const char *TAG = "motion";
 
 /* Defaults match v5 (config.h:69-76). NVS values stored as x1000 fixed-point. */
+#define MEDIAN_W 5    /* window size for the spike-rejection median filter */
+
 static struct {
     bool     enabled;
     float    pos_smooth;
@@ -28,6 +31,14 @@ static struct {
     float    err_integral;
     uint64_t last_us;
 
+    /* Spike-rejection median filter: keeps the last MEDIAN_W raw samples
+     * and uses the middle one (after sorting) as the "true" current value.
+     * Single-sample radar glitches get out-voted; rejection is total,
+     * unlike a low-pass which would let the spike bleed through. */
+    int16_t  med_buf[MEDIAN_W];
+    uint8_t  med_idx;
+    uint8_t  med_filled;
+
     target_t latest;
     SemaphoreHandle_t lock;
     int      min_cm, max_cm;
@@ -35,6 +46,18 @@ static struct {
 
 static float clamp(float v, float lo, float hi) {
     return v < lo ? lo : (v > hi ? hi : v);
+}
+
+/* In-place median of 5 ints. Insertion-sort is fastest at this size. */
+static int16_t median5(int16_t *src) {
+    int16_t a[MEDIAN_W];
+    for (int i = 0; i < MEDIAN_W; ++i) a[i] = src[i];
+    for (int i = 1; i < MEDIAN_W; ++i) {
+        int16_t x = a[i]; int j = i - 1;
+        while (j >= 0 && a[j] > x) { a[j+1] = a[j]; j--; }
+        a[j+1] = x;
+    }
+    return a[MEDIAN_W / 2];
 }
 
 static void motion_task(void *arg) {
@@ -55,11 +78,19 @@ static void motion_task(void *arg) {
         if (raw < s_m.min_cm) raw = s_m.min_cm;
         if (raw > s_m.max_cm) raw = s_m.max_cm;
 
+        /* Spike-rejection: median of last 5 raw samples. Until the buffer
+         * is filled, just pass-through (so first reading isn't blocked). */
+        s_m.med_buf[s_m.med_idx] = (int16_t)raw;
+        s_m.med_idx = (s_m.med_idx + 1) % MEDIAN_W;
+        if (s_m.med_filled < MEDIAN_W) s_m.med_filled++;
+        int filtered_raw = (s_m.med_filled == MEDIAN_W) ? median5(s_m.med_buf) : raw;
+
         target_t t = { .present = f.present, .energy = f.energy,
                        .direction = f.direction, .ts_us = f.ts_us };
 
+        t.raw_cm = (int16_t)filtered_raw;
         if (!s_m.enabled) {
-            t.distance_cm = (int16_t)raw;
+            t.distance_cm = (int16_t)filtered_raw;
         } else {
             uint64_t now = f.ts_us;
             float dt = s_m.last_us ? (float)(now - s_m.last_us) / 1e6f : 0.02f;
@@ -67,12 +98,22 @@ static void motion_task(void *arg) {
             dt = clamp(dt, 0.001f, 1.0f);
 
             if (s_m.smoothed <= 0) {
-                s_m.smoothed = (float)raw;
-                s_m.predicted = (float)raw;
+                s_m.smoothed = (float)filtered_raw;
+                s_m.predicted = (float)filtered_raw;
             }
 
-            s_m.smoothed = (1.f - s_m.pos_smooth) * s_m.smoothed +
-                                  s_m.pos_smooth  * (float)raw;
+            /* Adaptive alpha: when the target is moving fast, ease the
+             * filter (snappier response); when nearly stationary, clamp
+             * harder (calmer reading). Magnitude is the |delta| from the
+             * last smoothed estimate, scaled by a 30 cm "fast motion"
+             * threshold. Output is in [pos_smooth .. min(1, pos_smooth*4)]. */
+            float delta = fabsf((float)filtered_raw - s_m.smoothed);
+            float scale = clamp(delta / 30.0f, 0.0f, 1.0f);   /* 0=still, 1=fast */
+            float alpha_max = clamp(s_m.pos_smooth * 4.0f, s_m.pos_smooth, 0.9f);
+            float alpha_eff = s_m.pos_smooth + (alpha_max - s_m.pos_smooth) * scale;
+
+            s_m.smoothed = (1.f - alpha_eff) * s_m.smoothed +
+                                  alpha_eff  * (float)filtered_raw;
             float instant_v = (s_m.smoothed - s_m.predicted) / dt;
             instant_v = clamp(instant_v, -200.f, 200.f);
             s_m.velocity = (1.f - s_m.vel_smooth) * s_m.velocity +

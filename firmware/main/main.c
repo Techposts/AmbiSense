@@ -80,13 +80,18 @@ static void apply_pin_overrides(board_profile_t *runtime) {
     }
 }
 
-/* Telemetry pump: 5 Hz publish mesh-fused target + RSSI + peer health to
- * webui WS clients. Falls back to local motion_get() if mesh has no peers. */
+/* Telemetry pump: 20 Hz publish mesh-fused target + raw + RSSI + peer
+ * health to webui WS clients. Was 5 Hz — bumped to kill the visible
+ * stair-step jitter on the live distance graph. 20 Hz × ~120-byte JSON
+ * = 2.5 KB/s on the WiFi link, trivial. Pulls raw_cm from local
+ * motion_get() because mesh fused only carries the smoothed value. */
 static void telemetry_pump_task(void *arg) {
     (void)arg;
     while (1) {
         mesh_fused_t f;
         mesh_get_fused(&f);
+        target_t local;
+        motion_get(&local);
         mesh_peer_t peers[MESH_MAX_PEERS];
         size_t pn = mesh_peers_snapshot(peers, MESH_MAX_PEERS);
         size_t hn = 0;
@@ -94,15 +99,16 @@ static void telemetry_pump_task(void *arg) {
 
         webui_live_t live = {
             .distance_cm = f.distance_cm,
+            .raw_cm      = local.raw_cm,
             .direction   = f.direction,
             .rssi        = netmgr_get_rssi(),
-            .free_heap   = 0,   /* webui fills these in itself before broadcast */
+            .free_heap   = 0,
             .uptime_s    = 0,
             .peer_count   = (uint8_t)pn,
             .peer_healthy = (uint8_t)hn,
         };
         webui_publish_live(&live);
-        vTaskDelay(pdMS_TO_TICKS(200));
+        vTaskDelay(pdMS_TO_TICKS(50));   /* 20 Hz — see comment above */
     }
 }
 

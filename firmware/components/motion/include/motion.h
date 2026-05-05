@@ -22,6 +22,10 @@ extern "C" {
 typedef struct {
     bool      present;
     int16_t   distance_cm;     /* smoothed + predicted */
+    int16_t   raw_cm;          /* spike-rejected (median) but un-smoothed —
+                                * for the Motion screen's raw vs smoothed
+                                * line chart so users can see the smoother
+                                * actually working. */
     int8_t    direction;
     uint8_t   energy;
     uint64_t  ts_us;
