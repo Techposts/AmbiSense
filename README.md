@@ -48,6 +48,14 @@ VSCode users: install Espressif's ESP-IDF extension to get IntelliSense for
 IDF headers — without it, clangd will report `'esp_err.h' file not found`
 and similar; the code still builds correctly via `idf.py`.
 
+## v6 documentation
+
+| Document | Read when |
+|---|---|
+| [docs/V6-ARCHITECTURE.md](docs/V6-ARCHITECTURE.md) | Picking up the v6 rewrite cold — this captures the locked architectural decisions (peer mesh, modular radar drivers, NVS schema, board profiles). Read first before proposing any structural change. |
+| [docs/V6-ROADMAP.md](docs/V6-ROADMAP.md) | Planning what to build next — the 5-PR plan with status per PR and the tag/release cadence. |
+| [docs/HARDWARE.md](docs/HARDWARE.md) | Building or debugging hardware — reference wiring for C3 SuperMini, board profiles, sensor pinouts, and a flash-fails-to-connect troubleshooting ladder. |
+
 ## Repo layout
 
 ```
