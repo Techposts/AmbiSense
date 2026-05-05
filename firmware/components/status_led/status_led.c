@@ -4,6 +4,7 @@
 
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -13,7 +14,13 @@ static struct {
     uint8_t  gpio;
     bool     active_low;
     bool     inited;
-    _Atomic uint32_t pattern;     /* status_led_pattern_t cast to uint32 for atomic ops */
+    /* `pattern` is the stable pattern. `oneshot` overrides it until
+     * `oneshot_until_us` passes; on expiry we revert to `pattern`. The LED
+     * task re-reads both atomics on every step, so callers don't need to
+     * coordinate. */
+    _Atomic uint32_t pattern;
+    _Atomic uint32_t oneshot;
+    _Atomic uint64_t oneshot_until_us;
 } s_led;
 
 static inline void led_set(bool on) {
@@ -56,6 +63,18 @@ static void run_pattern(status_led_pattern_t p) {
             led_set(false); vTaskDelay(pdMS_TO_TICKS(100));
             return;
 
+        case STATUS_LED_PAIRING:
+            /* 5 Hz fast blink — clearly distinguishable from STA/AP. */
+            led_set(true);  vTaskDelay(pdMS_TO_TICKS(100));
+            led_set(false); vTaskDelay(pdMS_TO_TICKS(100));
+            return;
+
+        case STATUS_LED_IDENTIFY:
+            /* 10 Hz hammer blink — unmistakable for "this is me". */
+            led_set(true);  vTaskDelay(pdMS_TO_TICKS(50));
+            led_set(false); vTaskDelay(pdMS_TO_TICKS(50));
+            return;
+
         case STATUS_LED_ERROR:
             led_set(true);  vTaskDelay(pdMS_TO_TICKS(600));
             led_set(false); vTaskDelay(pdMS_TO_TICKS(150));
@@ -90,7 +109,15 @@ static void run_pattern(status_led_pattern_t p) {
 static void status_led_task(void *arg) {
     (void)arg;
     while (1) {
-        status_led_pattern_t p = (status_led_pattern_t)atomic_load(&s_led.pattern);
+        uint64_t now = (uint64_t)esp_timer_get_time();
+        uint64_t until = atomic_load(&s_led.oneshot_until_us);
+        status_led_pattern_t p;
+        if (until && now < until) {
+            p = (status_led_pattern_t)atomic_load(&s_led.oneshot);
+        } else {
+            if (until) atomic_store(&s_led.oneshot_until_us, 0ULL);
+            p = (status_led_pattern_t)atomic_load(&s_led.pattern);
+        }
         run_pattern(p);
     }
 }
@@ -101,6 +128,8 @@ esp_err_t status_led_init(uint8_t gpio_num, bool active_low) {
     s_led.gpio = gpio_num;
     s_led.active_low = active_low;
     atomic_store(&s_led.pattern, (uint32_t)STATUS_LED_BOOT);
+    atomic_store(&s_led.oneshot, (uint32_t)STATUS_LED_OFF);
+    atomic_store(&s_led.oneshot_until_us, 0ULL);
 
     gpio_config_t cfg = {
         .pin_bit_mask = 1ULL << gpio_num,
@@ -129,4 +158,10 @@ esp_err_t status_led_init(uint8_t gpio_num, bool active_low) {
 
 void status_led_set_pattern(status_led_pattern_t pattern) {
     atomic_store(&s_led.pattern, (uint32_t)pattern);
+}
+
+void status_led_oneshot(status_led_pattern_t pattern, uint32_t duration_ms) {
+    atomic_store(&s_led.oneshot, (uint32_t)pattern);
+    uint64_t until = (uint64_t)esp_timer_get_time() + (uint64_t)duration_ms * 1000ULL;
+    atomic_store(&s_led.oneshot_until_us, until);
 }

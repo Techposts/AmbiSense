@@ -52,8 +52,29 @@ typedef struct {
 esp_err_t mesh_init(void);
 
 /* Open a 30 s pairing window during which new peers' broadcasts are
- * accepted. */
+ * accepted. While the window is open this device also broadcasts a
+ * MSG_PAIR beacon every second; any peer that receives it auto-opens
+ * its own window (asymmetric pairing). */
 esp_err_t mesh_open_pairing(void);
+
+/* Window introspection — used by the UI to render a live countdown. */
+bool mesh_in_pairing(void);
+uint32_t mesh_pairing_remaining_ms(void);
+
+/* Send a unicast MSG_IDENTIFY to `mac`. The recipient blinks its status
+ * LED at 10 Hz for ~5 s so the user can physically locate it. */
+esp_err_t mesh_identify(const uint8_t mac[6]);
+
+/* Events the mesh layer emits to its consumer (main.c wires this so the
+ * status LED can react). Currently: peer joined, identify-me received. */
+typedef enum {
+    MESH_EVT_PEER_JOINED       = 1,
+    MESH_EVT_IDENTIFY_REQUESTED = 2,
+    MESH_EVT_PAIRING_OPENED    = 3,
+    MESH_EVT_PAIRING_CLOSED    = 4,
+} mesh_event_t;
+typedef void (*mesh_event_cb_t)(mesh_event_t evt, const uint8_t mac[6]);
+void mesh_set_event_cb(mesh_event_cb_t cb);
 
 /* Snapshot of currently-known peers (live + stale). Returns count. */
 size_t mesh_peers_snapshot(mesh_peer_t *out, size_t max);

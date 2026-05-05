@@ -36,6 +36,10 @@ esp_err_t motion_init(void);
 /* Get the latest smoothed target. Non-blocking. */
 void motion_get(target_t *out);
 
+/* Re-read all NVS-backed motion settings and reset filter state. Called
+ * by webui after /api/settings POST so changes apply without reboot. */
+void motion_reload(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -43,6 +43,31 @@ function PageHead({ title, sub, right }: any) {
   );
 }
 
+/* Shared debounced save — every screen with sliders uses this. Sliders fire
+ * onChange ~30×/s while dragging; without debouncing each tick fires a POST
+ * /api/settings + 2× GET (reload), which overwhelms the C3's single-core
+ * httpd (max_open_sockets=7) and triggers ERR_CONNECTION_RESET. With a
+ * 300 ms tail, only the *final* slider value POSTs once the user stops
+ * moving. Multiple keys touched within the window get coalesced into a
+ * single JSON body — the firmware /api/settings POST handler already
+ * iterates the whole object looking for known keys, so one batched call
+ * is identical in effect to N individual calls. */
+function useDebouncedSave(reload: () => void, setToast: (m: string, k?: 'ok'|'err') => void, delay = 300) {
+  const pending = useRef<any>({});
+  const timer = useRef<any>(null);
+  return (patch: any) => {
+    pending.current = { ...pending.current, ...patch };
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(async () => {
+      const body = pending.current;
+      pending.current = {};
+      timer.current = null;
+      try { await postJSON('/api/settings', body); reload(); }
+      catch (e: any) { setToast(e.message || 'Save failed', 'err'); }
+    }, delay);
+  };
+}
+
 /* ================================================================= */
 /*                          A. LIVE                                  */
 /* ================================================================= */
@@ -193,11 +218,12 @@ function DevField({ k, v }: any) {
 export function ScreenLeds({ settings, live, reload, setToast }: AppState) {
   const [s, setS] = useState(settings);
   useEffect(() => setS(settings), [JSON.stringify(settings)]);
-  const save = async (patch: any) => {
-    const next = { ...s, ...patch };
-    setS(next);
-    try { await postJSON('/api/settings', patch); reload(); }
-    catch (e: any) { setToast(e.message || 'Save failed', 'err'); }
+  const debouncedSave = useDebouncedSave(reload, setToast);
+  /* `save` updates local state immediately so the slider/preview feel
+   * instantaneous, then queues the network write under the debouncer. */
+  const save = (patch: any) => {
+    setS((prev: any) => ({ ...prev, ...patch }));
+    debouncedSave(patch);
   };
   const mode = s.light_mode ?? 0;
   const showColor = [0,2,3,4,5,6,9,10].includes(mode);
@@ -324,17 +350,17 @@ export function ScreenLeds({ settings, live, reload, setToast }: AppState) {
 /* ================================================================= */
 export function ScreenMotion({ settings, live, reload, setToast }: AppState) {
   const [s, setS] = useState(settings);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   useEffect(() => setS(settings), [JSON.stringify(settings)]);
-  const save = async (patch: any) => {
-    setS({ ...s, ...patch });
-    try { await postJSON('/api/settings', patch); reload(); }
-    catch (e: any) { setToast(e.message || 'Save failed', 'err'); }
+  const debouncedSave = useDebouncedSave(reload, setToast);
+  const save = (patch: any) => {
+    setS((prev: any) => ({ ...prev, ...patch }));
+    debouncedSave(patch);
   };
 
-  /* Both buffers come straight from the firmware now (raw_cm + distance_cm
-   * over WS at 20 Hz). No more client-side alpha simulation — the chart
-   * shows what the firmware *actually* feeds the LED engine. Removes
-   * the visible 200 ms client-side lag. */
+  /* Both buffers come straight from the firmware (raw_cm + distance_cm over
+   * WS at 20 Hz). No client-side alpha simulation — the chart shows what
+   * the firmware actually feeds the LED engine. */
   const rawRef = useRef<number[]>(Array(80).fill(0));
   const smoothRef = useRef<number[]>(Array(80).fill(0));
   const [raw, setRaw] = useState(rawRef.current);
@@ -349,16 +375,36 @@ export function ScreenMotion({ settings, live, reload, setToast }: AppState) {
   }, [live]);
 
   const enabled = !!s.motion_enabled;
+  const mode: 'kalman'|'pi' = (s.motion_mode === 'pi') ? 'pi' : 'kalman';
+  const response = s.response ?? 50;
+  const lookAhead = s.look_ahead_ms ?? 0;
+  const outlier = s.outlier_strength ?? 1;
+
+  /* Tooltip text under each main slider — explains *what* the knob does
+   * physically, not just its numeric value. Helps users without filtering
+   * theory background pick a setting that matches their installation. */
+  const responseHint =
+    response < 25 ? 'Heavy filtering. Drift is invisible, but fast walk-throughs lag noticeably.' :
+    response < 65 ? 'Balanced. Walks render smoothly; jitter is suppressed.' :
+                    'Snappy. The strip tracks subtle motion but radar noise leaks through.';
+  const lookHint =
+    lookAhead === 0    ? 'No predictive lead. The strip lights where the radar last saw you.' :
+    lookAhead < 200    ? 'Slight predictive lead — masks ~50 ms render latency.' :
+                         'Aggressive prediction. Great for fast stairs, may overshoot near corners.';
+  const outlierLabel = ['Off', 'Soft (3-sample)', 'Strong (7-sample)'][outlier] || 'Soft';
 
   return (
     <>
-      <PageHead title="Motion" sub="Smoothing, prediction, and PI gains"/>
+      <PageHead title="Motion" sub="Smoothing, prediction, outlier rejection"
+        right={<button class="btn btn-ghost btn-sm" onClick={() => setShowAdvanced(!showAdvanced)}>
+          <Icon name="settings" size={13}/> {showAdvanced ? 'Hide' : 'Show'} advanced
+        </button>}/>
 
       <div class="card" style="padding: 18px; margin-bottom: 14px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
           <div>
             <div style="font-size: 14px; font-weight: 600;">Motion smoothing</div>
-            <div style="font-size: 12px; color: var(--text-2);">Filters jitter and predicts velocity</div>
+            <div style="font-size: 12px; color: var(--text-2);">{enabled ? 'Filters jitter and predicts velocity' : 'Disabled — strip follows raw radar'}</div>
           </div>
           <Toggle large value={enabled} onChange={(v) => save({ motion_enabled: v ? 1 : 0 })}/>
         </div>
@@ -378,27 +424,99 @@ export function ScreenMotion({ settings, live, reload, setToast }: AppState) {
         </div>
       </div>
 
-      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px;">
-        <div class="card">
-          <div class="card-head"><span class="smallcaps">Filter</span></div>
-          <div class="card-body" style="display: flex; flex-direction: column; gap: 14px;">
-            <NumberAndSlider label="Position smoothing" value={s.pos_smooth_x1k ?? 200} onChange={(v) => save({ pos_smooth_x1k: v })} min={10} max={800} suffix="× 1/1000"/>
-            <NumberAndSlider label="Velocity smoothing" value={s.vel_smooth_x1k ?? 100} onChange={(v) => save({ vel_smooth_x1k: v })} min={10} max={500} suffix="× 1/1000"/>
-            <NumberAndSlider label="Prediction factor" value={s.predict_x1k ?? 500} onChange={(v) => save({ predict_x1k: v })} min={0} max={2000} suffix="× 1/1000"/>
-          </div>
-        </div>
-        <div class="card">
-          <div class="card-head"><span class="smallcaps">PI gains</span></div>
-          <div class="card-body" style="display: flex; flex-direction: column; gap: 14px;">
-            <NumberAndSlider label="P gain" value={s.p_gain_x1k ?? 100} onChange={(v) => save({ p_gain_x1k: v })} min={0} max={1000} suffix="× 1/1000"/>
-            <NumberAndSlider label="I gain" value={s.i_gain_x1k ?? 10} onChange={(v) => save({ i_gain_x1k: v })} min={0} max={200} suffix="× 1/1000"/>
-            <div style="padding: 10px; background: var(--bg-1); border-radius: 8px; font-size: 11px; color: var(--text-2); line-height: 1.5; display: flex; gap: 8px;">
-              <Icon name="info" size={13} style={{ color: 'var(--info)', flexShrink: 0, marginTop: 1 }}/>
-              <span>Higher P responds faster but overshoots. Higher I corrects steady-state offset over time.</span>
-            </div>
+      {/* Algorithm picker */}
+      <div class="card" style="margin-bottom: 14px;">
+        <div class="card-head"><span class="smallcaps">Algorithm</span></div>
+        <div class="card-body">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            {[
+              { id: 'kalman', name: 'Kalman', desc: 'Default. Estimates position + velocity together; energy-aware noise model. Best for stairs.' },
+              { id: 'pi',     name: 'Legacy PI', desc: 'EMA + PI controller from v5. Five tunables; familiar if you tuned the Arduino build.' },
+            ].map(a => {
+              const active = mode === a.id;
+              return (
+                <button onClick={() => save({ motion_mode: a.id })} style={`padding: 14px; border-radius: 10px; text-align: left; background: ${active ? 'linear-gradient(135deg, rgba(255,181,74,0.06), rgba(255,61,130,0.06))' : 'var(--bg-1)'}; border: ${active ? '1px solid rgba(255,122,61,0.55)' : '1px solid var(--line)'}; cursor: pointer; color: inherit;`}>
+                  <div style="font-size: 13px; font-weight: 600;">{a.name}</div>
+                  <div style="font-size: 11px; color: var(--text-3); margin-top: 2px;">{a.desc}</div>
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
+
+      {/* Two main sliders: Response + Look-ahead. These map onto either
+        * Kalman process noise (Q_pos, Q_vel) or PI alpha+predict in the
+        * firmware — the user shouldn't need to know which. */}
+      <div class="card" style="margin-bottom: 14px;">
+        <div class="card-head"><span class="smallcaps">Tuning</span></div>
+        <div class="card-body" style="display: flex; flex-direction: column; gap: 18px;">
+          <div>
+            <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px;">
+              <label style="font-size: 12px; color: var(--text-2);">Response</label>
+              <span style="font-size: 11px; color: var(--text-3);">Calm ⇆ Snappy · {response}</span>
+            </div>
+            <input type="range" min={0} max={100} value={response} class="range"
+              onChange={(e: any) => save({ response: +e.target.value })}/>
+            <div style="font-size: 11px; color: var(--text-3); margin-top: 4px;">{responseHint}</div>
+          </div>
+          <div>
+            <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px;">
+              <label style="font-size: 12px; color: var(--text-2);">Look-ahead</label>
+              <span style="font-size: 11px; color: var(--text-3);">{lookAhead} ms</span>
+            </div>
+            <input type="range" min={0} max={500} step={10} value={lookAhead} class="range"
+              onChange={(e: any) => save({ look_ahead_ms: +e.target.value })}/>
+            <div style="font-size: 11px; color: var(--text-3); margin-top: 4px;">{lookHint}</div>
+          </div>
+          <div>
+            <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px;">
+              <label style="font-size: 12px; color: var(--text-2);">Outlier rejection</label>
+              <span style="font-size: 11px; color: var(--text-3);">{outlierLabel}</span>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;">
+              {[
+                { v: 0, name: 'Off',    note: 'Trust radar 1:1' },
+                { v: 1, name: 'Soft',   note: 'Median of last 3' },
+                { v: 2, name: 'Strong', note: 'Median of last 7' },
+              ].map(o => {
+                const active = outlier === o.v;
+                return (
+                  <button onClick={() => save({ outlier_strength: o.v })} style={`padding: 10px; border-radius: 8px; background: ${active ? 'var(--bg-2)' : 'var(--bg-1)'}; border: ${active ? '1px solid rgba(255,122,61,0.55)' : '1px solid var(--line)'}; cursor: pointer; color: inherit; text-align: center;`}>
+                    <div style="font-size: 12px; font-weight: 500;">{o.name}</div>
+                    <div style="font-size: 10px; color: var(--text-3);">{o.note}</div>
+                  </button>
+                );
+              })}
+            </div>
+            <div style="font-size: 11px; color: var(--text-3); margin-top: 6px;">Stronger rejection masks single-sample radar glitches but adds 1-2 frames of lag.</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Advanced (collapsed by default) — exposes the v5 PI knobs for power
+        * users. Has visible effect only when Algorithm = Legacy PI. */}
+      {showAdvanced && (
+        <div class="card" style="margin-bottom: 14px; border-color: var(--line-soft);">
+          <div class="card-head" style="display: flex; justify-content: space-between; align-items: center;">
+            <span class="smallcaps">Advanced — Legacy PI gains</span>
+            <span class="chip" style={`background: ${mode === 'pi' ? 'var(--bg-2)' : 'transparent'}; color: ${mode === 'pi' ? 'var(--text-1)' : 'var(--text-3)'};`}>
+              {mode === 'pi' ? 'Active' : 'Inactive in Kalman mode'}
+            </span>
+          </div>
+          <div class="card-body" style="display: flex; flex-direction: column; gap: 14px;">
+            <NumberAndSlider label="Position smoothing α" value={s.pos_smooth_x1k ?? 200} onChange={(v) => save({ pos_smooth_x1k: v })} min={10} max={800} suffix="× 1/1000"/>
+            <NumberAndSlider label="Velocity smoothing α" value={s.vel_smooth_x1k ?? 100} onChange={(v) => save({ vel_smooth_x1k: v })} min={10} max={500} suffix="× 1/1000"/>
+            <NumberAndSlider label="Prediction factor"   value={s.predict_x1k    ?? 500} onChange={(v) => save({ predict_x1k:    v })} min={0}  max={2000} suffix="× 1/1000"/>
+            <NumberAndSlider label="P gain" value={s.p_gain_x1k ?? 100} onChange={(v) => save({ p_gain_x1k: v })} min={0} max={1000} suffix="× 1/1000"/>
+            <NumberAndSlider label="I gain" value={s.i_gain_x1k ?? 10}  onChange={(v) => save({ i_gain_x1k: v })} min={0} max={200}  suffix="× 1/1000"/>
+            <div style="padding: 10px; background: var(--bg-1); border-radius: 8px; font-size: 11px; color: var(--text-2); line-height: 1.5; display: flex; gap: 8px;">
+              <Icon name="info" size={13} style={{ color: 'var(--info)', flexShrink: 0, marginTop: 1 }}/>
+              <span>These are the v5 firmware knobs. In Kalman mode the Response slider above replaces them. Higher P responds faster but overshoots; higher I corrects steady-state drift over time.</span>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
@@ -408,26 +526,41 @@ export function ScreenMotion({ settings, live, reload, setToast }: AppState) {
 /* ================================================================= */
 export function ScreenMesh({ live, settings, setToast, reload }: AppState) {
   const [topology, setTopology] = useState<any>({ kind: 'straight', segments: [], total_leds: 30 });
-  const [mesh, setMesh] = useState<any>({ peers: [], fusion: 'most_recent', coordinator: true });
-  const [pairing, setPairing] = useState(false);
-  const [pairTime, setPairTime] = useState(0);
+  const [mesh, setMesh] = useState<any>({ peers: [], fusion: 'most_recent', coordinator: true, pairing: false, pairing_ms_left: 0, my_mac: '' });
+  const [identifying, setIdentifying] = useState<string | null>(null);
 
   const refresh = () => Promise.all([
     getJSON('/api/topology').then(setTopology),
     getJSON('/api/mesh').then(setMesh),
   ]).catch(() => {});
 
-  useEffect(() => { refresh(); const id = setInterval(refresh, 4000); return () => clearInterval(id); }, []);
+  /* Two polling cadences: 4 s when idle (cheap), 500 ms while pairing
+   * window is open (so the countdown ring updates in real time and we
+   * spot a new peer joining within half a second). The /api/mesh
+   * response carries pairing_ms_left from firmware — we never run a
+   * client-side countdown, so cancellation, OTA reboots, and pair-on-
+   * other-device events are all reflected accurately. */
   useEffect(() => {
-    if (!pairing) return;
-    setPairTime(30);
-    const t = setInterval(() => setPairTime(x => { if (x <= 1) { setPairing(false); return 0; } return x - 1; }), 1000);
-    return () => clearInterval(t);
-  }, [pairing]);
+    refresh();
+    const fast = mesh.pairing;
+    const id = setInterval(refresh, fast ? 500 : 4000);
+    return () => clearInterval(id);
+  }, [mesh.pairing]);
 
   const startPair = async () => {
-    try { await postJSON('/api/mesh', { pair: true }); setPairing(true); setToast('Pairing window open · 30 s'); }
+    try { await postJSON('/api/mesh', { pair: true }); setToast('Pairing window open · 30 s'); refresh(); }
     catch (e: any) { setToast(e.message || 'Pair failed', 'err'); }
+  };
+
+  const identifyPeer = async (mac: string) => {
+    setIdentifying(mac);
+    try {
+      await postJSON('/api/mesh/identify', { mac });
+      setToast(`Identifying ${mac.slice(-5)}…`);
+    } catch (e: any) {
+      setToast(e.message || 'Identify failed', 'err');
+    }
+    setTimeout(() => setIdentifying(null), 5000);
   };
 
   const setTopo = async (kind: string) => {
@@ -453,29 +586,52 @@ export function ScreenMesh({ live, settings, setToast, reload }: AppState) {
     { id: 'zone_based',   name: 'Zone based',   desc: 'Each device owns its segment range' },
   ];
 
+  const myMac: string = mesh.my_mac || '';
+  const pairSecsLeft = Math.ceil((mesh.pairing_ms_left || 0) / 1000);
+  const pairProgress = Math.max(0, Math.min(1, (mesh.pairing_ms_left || 0) / 30000));
+
+  /* Rendering "this device + all peers" as one unified list keeps the
+   * mental model "every device is equal" — coordinator is just whoever
+   * has the lowest MAC at any given moment. */
   const allDevices = [
-    { mac: settings.mac || '—', name: settings.device_name || 'this device', role: mesh.coordinator ? 'master' : 'slave', rssi: -42, lost: 0.0, online: true, self: true },
-    ...(mesh.peers || []).map((p: any) => ({ ...p, role: 'slave', name: p.mac, lost: 0.0, online: p.healthy })),
+    { mac: myMac || '—', name: settings.device_name || 'this device', role: mesh.coordinator ? 'coordinator' : 'follower', rssi: live.rssi || -50, healthy: true, self: true },
+    ...(mesh.peers || []).map((p: any) => ({ ...p, role: 'follower', name: p.mac.slice(-5).toUpperCase(), self: false })),
   ];
 
   return (
     <>
-      <PageHead title="Mesh & Topology" sub={`${(mesh.peers?.length || 0) + 1} devices · ESP-NOW · ${(topology.kind || 'straight').replace('_', '-')}`}
-        right={<button class="btn btn-primary" onClick={startPair} disabled={pairing}>
-          {pairing ? <><Icon name="link" size={13}/> Listening · {pairTime}s</> : <><Icon name="plus" size={13}/> Pair new device</>}
+      <PageHead title="Mesh & Topology" sub={`${(mesh.peers?.length || 0) + 1} device${(mesh.peers?.length || 0) ? 's' : ''} · ESP-NOW · ${(topology.kind || 'straight').replace('_', '-')}`}
+        right={<button class="btn btn-primary" onClick={startPair} disabled={mesh.pairing}>
+          {mesh.pairing ? <><Icon name="link" size={13}/> Listening · {pairSecsLeft}s</> : <><Icon name="plus" size={13}/> Pair new device</>}
         </button>}/>
 
-      {pairing && (
-        <div class="card" style="padding: 14px; margin-bottom: 14px; background: linear-gradient(135deg, rgba(255,181,74,0.06), rgba(255,61,130,0.06)); border-color: rgba(255,122,61,0.35);">
-          <div style="display: flex; align-items: center; gap: 14px;">
-            <div style="width: 32px; height: 32px; border-radius: 999px; background: var(--acc-grad); display: flex; align-items: center; justify-content: center; color: #1A0F08; animation: pulse-acc 1.4s infinite;">
-              <Icon name="link" size={16}/>
+      {/* Pairing card with circular SVG countdown — visual anchor that
+        * communicates "the device is actively listening RIGHT NOW" much
+        * more clearly than a number. */}
+      {mesh.pairing && (
+        <div class="card" style="padding: 16px; margin-bottom: 14px; background: linear-gradient(135deg, rgba(255,181,74,0.08), rgba(255,61,130,0.08)); border-color: rgba(255,122,61,0.45);">
+          <div style="display: flex; align-items: center; gap: 16px;">
+            <svg width="56" height="56" viewBox="0 0 56 56" style="flex-shrink: 0;">
+              <circle cx="28" cy="28" r="22" fill="none" stroke="var(--line)" stroke-width="3"/>
+              <circle cx="28" cy="28" r="22" fill="none" stroke="url(#pairgrad)" stroke-width="3"
+                stroke-dasharray={`${pairProgress * 138.2} 138.2`}
+                stroke-linecap="round" transform="rotate(-90 28 28)"
+                style="transition: stroke-dasharray 0.4s linear;"/>
+              <defs>
+                <linearGradient id="pairgrad" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stop-color="#FFB54A"/>
+                  <stop offset="50%" stop-color="#FF7A3D"/>
+                  <stop offset="100%" stop-color="#FF3D82"/>
+                </linearGradient>
+              </defs>
+              <text x="28" y="32" text-anchor="middle" font-size="13" font-weight="600" fill="var(--text-0)">{pairSecsLeft}</text>
+            </svg>
+            <div style="flex: 1; min-width: 0;">
+              <div style="font-size: 14px; font-weight: 600; margin-bottom: 2px;">Pairing window open</div>
+              <div style="font-size: 12px; color: var(--text-2); line-height: 1.5;">
+                On the other device, either hold the BOOT button for 3 seconds <em>or</em> open its web UI and click <b>Pair new device</b>. They auto-connect — no need to click on both.
+              </div>
             </div>
-            <div style="flex: 1;">
-              <div style="font-size: 13px; font-weight: 600;">Pairing window open · {pairTime}s</div>
-              <div style="font-size: 12px; color: var(--text-2);">Press the button on the new device until its status LED blinks twice</div>
-            </div>
-            <button class="btn btn-sm" onClick={() => setPairing(false)}>Cancel</button>
           </div>
         </div>
       )}
@@ -499,27 +655,39 @@ export function ScreenMesh({ live, settings, setToast, reload }: AppState) {
       </div>
 
       <div class="card" style="margin-bottom: 14px;">
-        <div class="card-head"><span class="smallcaps">Devices</span></div>
+        <div class="card-head" style="display: flex; justify-content: space-between; align-items: center;">
+          <span class="smallcaps">Devices</span>
+          <span style="font-size: 11px; color: var(--text-3);">Click <b>Identify</b> to make a device blink — useful while wiring topology</span>
+        </div>
         <div class="card-body" style="display: flex; flex-direction: column; gap: 8px;">
-          {allDevices.map((d: any) => (
-            <div style="display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--bg-1); border: 1px solid var(--line-soft); border-radius: 10px;">
-              <span class={`dot ${d.online ? 'dot-ok' : 'dot-err'}`}/>
-              <div style="flex: 1; min-width: 0;">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                  <span style="font-size: 13px; font-weight: 500;">{d.name}</span>
-                  <span class="chip" style="text-transform: capitalize;">{d.role}</span>
+          {allDevices.map((d: any) => {
+            const isIdentifying = identifying === d.mac;
+            return (
+              <div style={`display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: ${d.self ? 'linear-gradient(135deg, rgba(255,181,74,0.04), rgba(255,61,130,0.04))' : 'var(--bg-1)'}; border: 1px solid ${d.self ? 'rgba(255,122,61,0.35)' : 'var(--line-soft)'}; border-radius: 10px;`}>
+                <span class={`dot ${d.healthy ? 'dot-ok' : 'dot-err'}`}/>
+                <div style="flex: 1; min-width: 0;">
+                  <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                    <span style="font-size: 13px; font-weight: 500;">{d.name}</span>
+                    <span class="chip" style="text-transform: capitalize;">{d.role}</span>
+                    {d.self && <span class="chip" style="background: rgba(255,122,61,0.15); color: var(--acc-orange);">this device</span>}
+                  </div>
+                  <div class="mono" style="font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis;">{d.mac}</div>
                 </div>
-                <div class="mono" style="font-size: 11px; color: var(--text-3);">{d.mac}</div>
+                <div class="mono" style="font-size: 11px; color: var(--text-2); text-align: right; flex-shrink: 0;">
+                  <div>{d.rssi || '—'} dBm</div>
+                </div>
+                {!d.self && (
+                  <button class="btn btn-sm btn-ghost" disabled={isIdentifying}
+                    onClick={() => identifyPeer(d.mac)} style="flex-shrink: 0;">
+                    {isIdentifying ? <><Icon name="check" size={12}/> Blinking…</> : <><Icon name="search" size={12}/> Identify</>}
+                  </button>
+                )}
               </div>
-              <div class="mono" style="font-size: 11px; color: var(--text-2); text-align: right;">
-                <div>{d.rssi} dBm</div>
-                <div style={`color: ${d.lost > 5 ? 'var(--err)' : 'var(--text-3)'};`}>{(d.lost || 0).toFixed(1)}% lost</div>
-              </div>
-            </div>
-          ))}
+            );
+          })}
           {allDevices.length <= 1 && (
             <div style="font-size: 12px; color: var(--text-3); padding: 12px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px;">
-              No peers paired yet. Click "Pair new device" above.
+              No peers paired yet. Click <b>Pair new device</b> above to start a 30-second pairing window.
             </div>
           )}
         </div>

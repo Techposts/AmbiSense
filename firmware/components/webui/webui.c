@@ -28,6 +28,7 @@
 #include "radar.h"
 #include "topology.h"
 #include "mesh.h"
+#include "motion.h"
 
 static const char *TAG = "webui";
 
@@ -691,8 +692,13 @@ static esp_err_t handle_settings_get(httpd_req_t *req) {
     add_u32_if(r, "dist", "min", "min_distance");
     add_u32_if(r, "dist", "max", "max_distance");
 
-    /* Motion smoothing */
-    add_u8_if (r, "motion", "en", "motion_enabled");
+    /* Motion smoothing — v3 simplified knobs (mode/response/look-ahead/outlier)
+     * plus the legacy PI gains kept as advanced overrides. */
+    add_str_if(r, "motion", "mode",  "motion_mode");
+    add_u8_if (r, "motion", "en",    "motion_enabled");
+    add_u8_if (r, "motion", "resp",  "response");
+    add_u32_if(r, "motion", "la_ms", "look_ahead_ms");
+    add_u8_if (r, "motion", "outl",  "outlier_strength");
     add_u32_if(r, "motion", "ps", "pos_smooth_x1k");
     add_u32_if(r, "motion", "vs", "vel_smooth_x1k");
     add_u32_if(r, "motion", "pf", "predict_x1k");
@@ -730,7 +736,11 @@ static const struct setting_map {
     { "effect_intensity", "led",    "eint",       '8' },
     { "min_distance",     "dist",   "min",        '4' },
     { "max_distance",     "dist",   "max",        '4' },
+    { "motion_mode",      "motion", "mode",       's' },
     { "motion_enabled",   "motion", "en",         '8' },
+    { "response",         "motion", "resp",       '8' },
+    { "look_ahead_ms",    "motion", "la_ms",      '4' },
+    { "outlier_strength", "motion", "outl",       '8' },
     { "pos_smooth_x1k",   "motion", "ps",         '4' },
     { "vel_smooth_x1k",   "motion", "vs",         '4' },
     { "predict_x1k",      "motion", "pf",         '4' },
@@ -766,8 +776,11 @@ static esp_err_t handle_settings_post(httpd_req_t *req) {
         }
     }
     cJSON_Delete(j);
-    /* Push LED-engine settings live without reboot. */
+    /* Push LED-engine + motion settings live without reboot. Both modules
+     * are designed to re-read all NVS keys on reload; expensive but called
+     * at most once per save click. */
     led_engine_reload();
+    motion_reload();
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "ok", true);
     cJSON_AddNumberToObject(r, "updated", updated);
@@ -815,8 +828,19 @@ static esp_err_t handle_radar_diag(httpd_req_t *req) {
 static esp_err_t handle_mesh_get(httpd_req_t *req) {
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "coordinator", mesh_is_coordinator());
+    cJSON_AddBoolToObject(r, "pairing", mesh_in_pairing());
+    cJSON_AddNumberToObject(r, "pairing_ms_left", mesh_pairing_remaining_ms());
     static const char *FUSE_NAMES[] = {"most_recent","slave_first","master_first","zone_based"};
     cJSON_AddStringToObject(r, "fusion", FUSE_NAMES[mesh_get_fusion()]);
+
+    /* Our own MAC — UI uses it to highlight "this device" in the peers
+     * card and to filter ourselves out of identify-target dropdowns. */
+    uint8_t mymac[6];
+    esp_read_mac(mymac, ESP_MAC_WIFI_STA);
+    char myms[18];
+    snprintf(myms, sizeof(myms), "%02x:%02x:%02x:%02x:%02x:%02x",
+             mymac[0], mymac[1], mymac[2], mymac[3], mymac[4], mymac[5]);
+    cJSON_AddStringToObject(r, "my_mac", myms);
 
     mesh_peer_t peers[MESH_MAX_PEERS];
     size_t n = mesh_peers_snapshot(peers, MESH_MAX_PEERS);
@@ -854,6 +878,33 @@ static esp_err_t handle_mesh_post(httpd_req_t *req) {
     cJSON_Delete(j);
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "ok", true);
+    cJSON_AddBoolToObject(r, "pairing", mesh_in_pairing());
+    cJSON_AddNumberToObject(r, "pairing_ms_left", mesh_pairing_remaining_ms());
+    return send_json(req, r);
+}
+
+/* /api/mesh/identify {mac:"aa:bb:..."} — unicast IDENTIFY so the named
+ * peer blinks its LED for 5 s. Lets the user physically map MACs to
+ * actual stair locations during topology setup. */
+static esp_err_t handle_mesh_identify(httpd_req_t *req) {
+    if (!gate_auth(req)) return ESP_OK;
+    cJSON *j = read_body_json(req);
+    if (!j) return send_err(req, 400, "bad json");
+    cJSON *mac = cJSON_GetObjectItem(j, "mac");
+    if (!mac || !cJSON_IsString(mac)) { cJSON_Delete(j); return send_err(req, 400, "mac required"); }
+    unsigned m[6];
+    if (sscanf(mac->valuestring, "%x:%x:%x:%x:%x:%x", &m[0],&m[1],&m[2],&m[3],&m[4],&m[5]) != 6) {
+        cJSON_Delete(j);
+        return send_err(req, 400, "bad mac format");
+    }
+    cJSON_Delete(j);
+    uint8_t target[6] = { (uint8_t)m[0], (uint8_t)m[1], (uint8_t)m[2],
+                          (uint8_t)m[3], (uint8_t)m[4], (uint8_t)m[5] };
+    esp_err_t err = mesh_identify(target);
+    if (err != ESP_OK) return send_err(req, 500, "send failed");
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", true);
+    cJSON_AddStringToObject(r, "note", "peer should blink for 5 s");
     return send_json(req, r);
 }
 
@@ -1066,6 +1117,7 @@ static const httpd_uri_t k_routes[] = {
     { "/api/distance",                   HTTP_GET,  handle_distance,         NULL },
     { "/api/mesh",                       HTTP_GET,  handle_mesh_get,         NULL },
     { "/api/mesh",                       HTTP_POST, handle_mesh_post,        NULL },
+    { "/api/mesh/identify",              HTTP_POST, handle_mesh_identify,    NULL },
     { "/api/topology",                   HTTP_GET,  handle_topology_get,     NULL },
     { "/api/topology",                   HTTP_POST, handle_topology_post,    NULL },
     { "/api/ota",                        HTTP_POST, handle_ota,              NULL },

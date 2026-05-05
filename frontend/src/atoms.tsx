@@ -36,6 +36,9 @@ export const Icon = ({ name, size = 16, stroke = 1.6, style }: {
     palette: <><circle cx="13.5" cy="6.5" r="1.5" fill="currentColor"/><circle cx="17.5" cy="10.5" r="1.5" fill="currentColor"/><circle cx="8.5" cy="7.5" r="1.5" fill="currentColor"/><circle cx="6.5" cy="12.5" r="1.5" fill="currentColor"/><path d="M12 22a10 10 0 1 1 10-10c0 2.76-2.24 4-5 4h-2a2 2 0 0 0-1 3.74A2 2 0 0 1 12 22z"/></>,
     play: <><path d="M5 3l14 9-14 9V3z" fill="currentColor"/></>,
     pause: <><rect x="6" y="4" width="4" height="16" fill="currentColor"/><rect x="14" y="4" width="4" height="16" fill="currentColor"/></>,
+    plus: <><path d="M12 5v14M5 12h14"/></>,
+    link: <><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></>,
+    search: <><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></>,
   };
   return <svg {...common}>{paths[name] || null}</svg>;
 };

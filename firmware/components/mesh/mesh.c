@@ -22,11 +22,13 @@ static const char *TAG = "mesh";
 #define MSG_HEARTBEAT  2
 #define MSG_GOSSIP     3
 #define MSG_CHAN_ANN   4
-#define MSG_PAIR       5
+#define MSG_PAIR       5    /* sent every 1 s while pairing window open */
+#define MSG_IDENTIFY   6    /* unicast: payload extends with target_mac */
 
 #define MESH_MAGIC 0xA61B
 
-#define PAIRING_WINDOW_MS  30000
+#define PAIRING_WINDOW_MS    30000
+#define COORD_HYSTERESIS_US  (5ULL * 1000ULL * 1000ULL)   /* 5 s before role flip */
 
 typedef struct __attribute__((packed)) {
     uint16_t magic;
@@ -56,6 +58,16 @@ static struct {
     bool         inited;
     mesh_fusion_t fusion;
     uint16_t     last_gossip_version;
+
+    /* Coordinator hysteresis: when the elected role disagrees with our
+     * current role, we wait COORD_HYSTERESIS_US of consistent disagreement
+     * before flipping. Prevents flap from a single dropped packet. */
+    uint64_t     coord_pending_since_us;
+
+    /* Last time we emitted a MSG_PAIR beacon. */
+    uint64_t     last_pair_beacon_us;
+
+    mesh_event_cb_t event_cb;
 } s_m;
 
 /* ---- helpers ---- */
@@ -71,8 +83,17 @@ static bool mac_lt(const uint8_t a[6], const uint8_t b[6]) {
     return memcmp(a, b, 6) < 0;
 }
 
+static bool in_pairing_window(void) {
+    return (uint64_t)esp_timer_get_time() < s_m.pairing_until_us;
+}
+
 static void recompute_coordinator_locked(void) {
-    /* Coordinator = lowest-MAC peer that is currently healthy (or self). */
+    /* Coordinator = lowest-MAC peer that is currently healthy (or self).
+     * Hysteresis: once an election outcome differs from our current role
+     * we record the time and only flip once the outcome has been stable
+     * for COORD_HYSTERESIS_US. This prevents a single dropped heartbeat
+     * (which marks a peer "stale" for one tick) from causing two devices
+     * to briefly both believe they are the coordinator. */
     uint8_t best[6];
     memcpy(best, s_m.my_mac, 6);
     uint64_t now = (uint64_t)esp_timer_get_time();
@@ -81,15 +102,23 @@ static void recompute_coordinator_locked(void) {
         if (now - s_m.peers[i].last_seen_us > (uint64_t)MESH_TIMEOUT_MS * 1000ULL) continue;
         if (mac_lt(s_m.peers[i].mac, best)) memcpy(best, s_m.peers[i].mac, 6);
     }
-    bool was = s_m.is_coordinator;
-    s_m.is_coordinator = (memcmp(best, s_m.my_mac, 6) == 0);
-    if (was != s_m.is_coordinator) {
+    bool desired = (memcmp(best, s_m.my_mac, 6) == 0);
+
+    if (desired == s_m.is_coordinator) {
+        s_m.coord_pending_since_us = 0;
+        return;
+    }
+    if (s_m.coord_pending_since_us == 0) {
+        s_m.coord_pending_since_us = now;
+        ESP_LOGI(TAG, "Coordinator change pending → %s (5 s hysteresis)",
+                 desired ? "this device" : "peer");
+        return;
+    }
+    if (now - s_m.coord_pending_since_us >= COORD_HYSTERESIS_US) {
+        s_m.is_coordinator = desired;
+        s_m.coord_pending_since_us = 0;
         ESP_LOGI(TAG, "Coordinator role: %s", s_m.is_coordinator ? "this device" : "peer");
     }
-}
-
-static bool in_pairing_window(void) {
-    return (uint64_t)esp_timer_get_time() < s_m.pairing_until_us;
 }
 
 static void add_peer_locked(const uint8_t mac[6]) {
@@ -112,6 +141,11 @@ static void add_peer_locked(const uint8_t mac[6]) {
     s_m.peer_count++;
     ESP_LOGI(TAG, "Peer added: %02x:%02x:%02x:%02x:%02x:%02x  (count=%u)",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (unsigned)s_m.peer_count);
+
+    /* Notify upper layer outside the lock would be cleaner, but our cb is
+     * documented as fast-callable and the lock is uncontended at this
+     * point — fire it inline. */
+    if (s_m.event_cb) s_m.event_cb(MESH_EVT_PEER_JOINED, mac);
 }
 
 /* ---- ESP-NOW recv callback ---- */
@@ -121,6 +155,25 @@ static void on_recv(const esp_now_recv_info_t *info, const uint8_t *data, int le
     const peer_msg_t *m = (const peer_msg_t *)data;
     if (m->magic != MESH_MAGIC) return;
     if (memcmp(info->src_addr, s_m.my_mac, 6) == 0) return;  /* our own */
+
+    /* IDENTIFY is special: handle outside the lock so we can fire the
+     * status-LED reaction without holding the mesh mutex while a status
+     * LED API runs. We still snapshot whether we're the target. */
+    bool identify_for_me = false;
+    if (m->msg_type == MSG_IDENTIFY && len >= (int)sizeof(peer_msg_t) + 6) {
+        const uint8_t *target = data + sizeof(peer_msg_t);
+        identify_for_me = (memcmp(target, s_m.my_mac, 6) == 0);
+    }
+
+    /* Asymmetric pairing: receiving a MSG_PAIR from anyone reopens our
+     * own window. So clicking "Pair" on either device pulls the other in
+     * — no need to tap both physical buttons. */
+    bool opened_window = false;
+    if (m->msg_type == MSG_PAIR && !in_pairing_window()) {
+        s_m.pairing_until_us = (uint64_t)esp_timer_get_time() + (uint64_t)PAIRING_WINDOW_MS * 1000ULL;
+        opened_window = true;
+        ESP_LOGI(TAG, "Pairing auto-opened by peer beacon");
+    }
 
     xSemaphoreTake(s_m.lock, portMAX_DELAY);
     int idx = peer_idx_locked(info->src_addr);
@@ -157,9 +210,13 @@ static void on_recv(const esp_now_recv_info_t *info, const uint8_t *data, int le
 
     recompute_coordinator_locked();
     xSemaphoreGive(s_m.lock);
+
+    /* Fire deferred events outside the lock. */
+    if (opened_window && s_m.event_cb) s_m.event_cb(MESH_EVT_PAIRING_OPENED, s_m.my_mac);
+    if (identify_for_me && s_m.event_cb) s_m.event_cb(MESH_EVT_IDENTIFY_REQUESTED, info->src_addr);
 }
 
-/* ---- broadcast task: 5 Hz target broadcast, 1 Hz heartbeat ---- */
+/* ---- broadcast task: 5 Hz target broadcast, 1 Hz pair beacon ---- */
 
 static void make_msg(peer_msg_t *out, uint8_t type) {
     target_t t;
@@ -177,10 +234,29 @@ static void make_msg(peer_msg_t *out, uint8_t type) {
 
 static void broadcast_task(void *arg) {
     (void)arg;
+    bool was_pairing = false;
     while (1) {
         peer_msg_t msg;
         make_msg(&msg, MSG_TARGET);
         esp_now_send(BCAST_MAC, (const uint8_t *)&msg, sizeof(msg));
+
+        /* MSG_PAIR beacon at 1 Hz while window open. Tracks state edges so
+         * the event callback is fired exactly once on open and on close. */
+        bool pairing_now = in_pairing_window();
+        if (pairing_now) {
+            uint64_t now = (uint64_t)esp_timer_get_time();
+            if (now - s_m.last_pair_beacon_us >= 1000000ULL) {
+                peer_msg_t pm;
+                make_msg(&pm, MSG_PAIR);
+                esp_now_send(BCAST_MAC, (const uint8_t *)&pm, sizeof(pm));
+                s_m.last_pair_beacon_us = now;
+            }
+        }
+        if (was_pairing && !pairing_now) {
+            ESP_LOGI(TAG, "Pairing window closed");
+            if (s_m.event_cb) s_m.event_cb(MESH_EVT_PAIRING_CLOSED, s_m.my_mac);
+        }
+        was_pairing = pairing_now;
 
         /* Mark stale peers + recompute coordinator + step to next tick. */
         xSemaphoreTake(s_m.lock, portMAX_DELAY);
@@ -245,8 +321,46 @@ esp_err_t mesh_init(void) {
 
 esp_err_t mesh_open_pairing(void) {
     s_m.pairing_until_us = (uint64_t)esp_timer_get_time() + (uint64_t)PAIRING_WINDOW_MS * 1000ULL;
+    s_m.last_pair_beacon_us = 0;   /* force immediate beacon on next tick */
     ESP_LOGI(TAG, "Pairing window opened (30 s)");
+    if (s_m.event_cb) s_m.event_cb(MESH_EVT_PAIRING_OPENED, s_m.my_mac);
     return ESP_OK;
+}
+
+bool mesh_in_pairing(void) {
+    return in_pairing_window();
+}
+
+uint32_t mesh_pairing_remaining_ms(void) {
+    uint64_t now = (uint64_t)esp_timer_get_time();
+    if (now >= s_m.pairing_until_us) return 0;
+    return (uint32_t)((s_m.pairing_until_us - now) / 1000ULL);
+}
+
+esp_err_t mesh_identify(const uint8_t mac[6]) {
+    if (!mac) return ESP_ERR_INVALID_ARG;
+    /* Add the peer to esp-now if we don't have it yet — the user may be
+     * identifying a topology-listed device that isn't currently a peer. */
+    xSemaphoreTake(s_m.lock, portMAX_DELAY);
+    if (peer_idx_locked(mac) < 0) add_peer_locked(mac);
+    xSemaphoreGive(s_m.lock);
+
+    uint8_t buf[sizeof(peer_msg_t) + 6];
+    peer_msg_t *m = (peer_msg_t *)buf;
+    make_msg(m, MSG_IDENTIFY);
+    memcpy(buf + sizeof(peer_msg_t), mac, 6);
+    esp_err_t err = esp_now_send(mac, buf, sizeof(buf));
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "mesh_identify: esp_now_send failed 0x%x", err);
+    } else {
+        ESP_LOGI(TAG, "Identify request sent to %02x:%02x:%02x:%02x:%02x:%02x",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    }
+    return err;
+}
+
+void mesh_set_event_cb(mesh_event_cb_t cb) {
+    s_m.event_cb = cb;
 }
 
 size_t mesh_peers_snapshot(mesh_peer_t *out, size_t max) {

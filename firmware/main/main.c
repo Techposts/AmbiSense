@@ -32,6 +32,7 @@
 #include "led_engine.h"
 #include "topology.h"
 #include "mesh.h"
+#include "button.h"
 
 static const char *TAG = "ambisense";
 
@@ -77,6 +78,53 @@ static void apply_pin_overrides(board_profile_t *runtime) {
         }
         *(uint8_t *)((char *)runtime + pin_keys[i].off) = pin;
         ESP_LOGI(TAG, "Pin override: %s = GPIO %u", pin_keys[i].key, pin);
+    }
+}
+
+/* Mesh layer event reactions: surface peer joins / pair window edges /
+ * incoming identify pings on the onboard status LED. Identify is the
+ * UX-critical one — when the user clicks "Identify" on this device's
+ * card in the web UI, the LED hammers at 10 Hz for 5 s so they can
+ * physically locate which board is which during stair installation. */
+static void on_mesh_event(mesh_event_t evt, const uint8_t mac[6]) {
+    (void)mac;
+    switch (evt) {
+        case MESH_EVT_PEER_JOINED:
+            ESP_LOGI(TAG, "EVT peer joined %02x:%02x:%02x:%02x:%02x:%02x",
+                     mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+            /* Brief 1 s "OK" pulse — visible but unobtrusive. */
+            status_led_oneshot(STATUS_LED_OTA, 1000);
+            break;
+        case MESH_EVT_IDENTIFY_REQUESTED:
+            ESP_LOGI(TAG, "EVT identify requested by peer");
+            status_led_oneshot(STATUS_LED_IDENTIFY, 5000);
+            break;
+        case MESH_EVT_PAIRING_OPENED:
+            ESP_LOGI(TAG, "EVT pairing window opened");
+            status_led_oneshot(STATUS_LED_PAIRING, 30000);
+            break;
+        case MESH_EVT_PAIRING_CLOSED:
+            ESP_LOGI(TAG, "EVT pairing window closed");
+            /* The oneshot expires automatically; nothing to do here. */
+            break;
+    }
+}
+
+/* Button events: long-press (3 s) opens the pairing window — the standard
+ * "physically pair this device" gesture. The mesh event callback above
+ * then drives the LED. Short / very-long are reserved for future use. */
+static void on_button(button_event_t evt) {
+    switch (evt) {
+        case BUTTON_PRESS_SHORT:
+            ESP_LOGI(TAG, "Button: short press (no-op in v6.0)");
+            break;
+        case BUTTON_PRESS_LONG:
+            ESP_LOGI(TAG, "Button: long press → opening pairing window");
+            mesh_open_pairing();
+            break;
+        case BUTTON_PRESS_VERYLONG:
+            ESP_LOGW(TAG, "Button: very-long press (factory reset reserved for v6.1)");
+            break;
     }
 }
 
@@ -170,6 +218,14 @@ void app_main(void) {
      * requires Wi-Fi started. */
     topology_init();
     if (mesh_init() != ESP_OK) ESP_LOGW(TAG, "mesh_init failed (single-device fallback)");
+    mesh_set_event_cb(on_mesh_event);
+
+    /* Physical BOOT button — long-press (3 s) opens pairing window. */
+    if (runtime.button_pin != BOARD_PIN_NONE) {
+        if (button_init(runtime.button_pin, true /* active_low */, on_button) != ESP_OK) {
+            ESP_LOGW(TAG, "button_init on GPIO %u failed", runtime.button_pin);
+        }
+    }
 
     xTaskCreate(telemetry_pump_task, "tele_pump", 3072, NULL, 3, NULL);
 
