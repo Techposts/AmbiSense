@@ -54,6 +54,45 @@ esp_err_t settings_set_pin_override(const char *key, uint8_t pin);
 esp_err_t settings_get_radar_kind(char *out, size_t max);
 esp_err_t settings_set_radar_kind(const char *kind);
 
+/* ---- wifi namespace -----------------------------------------------------
+ * Stores: wifi.ssid (string), wifi.pass (string), wifi.hostname (string).
+ * Note: v6.0 stores creds plaintext in NVS. v6.x will move to chip-key AES.
+ */
+esp_err_t settings_get_wifi_ssid(char *out, size_t max);
+esp_err_t settings_set_wifi_ssid(const char *ssid);
+esp_err_t settings_get_wifi_pass(char *out, size_t max);
+esp_err_t settings_set_wifi_pass(const char *pass);
+esp_err_t settings_get_hostname(char *out, size_t max);
+esp_err_t settings_set_hostname(const char *name);
+
+/* ---- sys namespace ------------------------------------------------------
+ * Stores: sys.device_name (string).
+ */
+esp_err_t settings_get_device_name(char *out, size_t max);
+esp_err_t settings_set_device_name(const char *name);
+
+/* ---- auth namespace -----------------------------------------------------
+ * Stores: auth.pw_hash (32-byte PBKDF2-SHA256 hash), auth.pw_salt (16 bytes).
+ * Empty/missing means auth disabled.
+ */
+esp_err_t settings_get_auth_hash(uint8_t out_hash[32], uint8_t out_salt[16]);
+esp_err_t settings_set_auth_hash(const uint8_t hash[32], const uint8_t salt[16]);
+esp_err_t settings_clear_auth(void);
+
+/* ---- led namespace ------------------------------------------------------
+ * All LED-engine settings as typed accessors. PR #3 owns these.
+ */
+esp_err_t settings_get_u32(const char *ns, const char *key, uint32_t *out);
+esp_err_t settings_set_u32(const char *ns, const char *key, uint32_t v);
+esp_err_t settings_get_i32(const char *ns, const char *key, int32_t *out);
+esp_err_t settings_set_i32(const char *ns, const char *key, int32_t v);
+esp_err_t settings_get_u8(const char *ns, const char *key, uint8_t *out);
+esp_err_t settings_set_u8(const char *ns, const char *key, uint8_t v);
+esp_err_t settings_get_blob(const char *ns, const char *key, void *out, size_t *len);
+esp_err_t settings_set_blob(const char *ns, const char *key, const void *data, size_t len);
+esp_err_t settings_get_str(const char *ns, const char *key, char *out, size_t max);
+esp_err_t settings_set_str(const char *ns, const char *key, const char *val);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1,0 +1,767 @@
+#include "webui.h"
+
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <inttypes.h>
+
+#include "esp_log.h"
+#include "esp_http_server.h"
+#include "esp_wifi.h"
+#include "esp_app_desc.h"
+#include "esp_system.h"
+#include "esp_idf_version.h"
+#include "esp_mac.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "cJSON.h"
+
+#include "settings.h"
+#include "auth.h"
+#include "netmgr.h"
+#include "ota.h"
+#include "board.h"
+
+static const char *TAG = "webui";
+
+#define MAX_WS_CLIENTS 4
+
+static struct {
+    httpd_handle_t srv;
+    int ws_fds[MAX_WS_CLIENTS];
+    SemaphoreHandle_t lock;
+    webui_live_t latest;
+} s_web;
+
+/* ============================================================
+ *  helpers
+ * ============================================================ */
+
+static esp_err_t send_json(httpd_req_t *req, cJSON *root) {
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) return ESP_ERR_NO_MEM;
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t err = httpd_resp_send(req, out, strlen(out));
+    free(out);
+    return err;
+}
+
+static esp_err_t send_err(httpd_req_t *req, int code, const char *msg) {
+    char body[128];
+    snprintf(body, sizeof(body), "{\"error\":\"%s\"}", msg);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_status(req,
+        code == 400 ? "400 Bad Request" :
+        code == 401 ? "401 Unauthorized" :
+        code == 404 ? "404 Not Found" :
+        code == 500 ? "500 Internal Server Error" :
+        "500 Internal Server Error");
+    return httpd_resp_send(req, body, strlen(body));
+}
+
+static cJSON *read_body_json(httpd_req_t *req) {
+    if (req->content_len == 0 || req->content_len > 4096) return NULL;
+    char *buf = malloc(req->content_len + 1);
+    if (!buf) return NULL;
+    int got = 0;
+    while (got < (int)req->content_len) {
+        int n = httpd_req_recv(req, buf + got, req->content_len - got);
+        if (n <= 0) { free(buf); return NULL; }
+        got += n;
+    }
+    buf[got] = 0;
+    cJSON *j = cJSON_Parse(buf);
+    free(buf);
+    return j;
+}
+
+static bool extract_session_token(httpd_req_t *req, char *out, size_t max) {
+    char hdr[256];
+    if (httpd_req_get_hdr_value_str(req, "Cookie", hdr, sizeof(hdr)) != ESP_OK) return false;
+    /* Find ambisense=<hex> */
+    const char *p = strstr(hdr, "ambisense=");
+    if (!p) return false;
+    p += strlen("ambisense=");
+    size_t i = 0;
+    while (*p && *p != ';' && *p != ' ' && i < max - 1) out[i++] = *p++;
+    out[i] = 0;
+    return i > 0;
+}
+
+static bool gate_auth(httpd_req_t *req) {
+    if (!auth_is_enabled()) return true;
+    char tok[AUTH_TOKEN_HEX_LEN + 1];
+    if (!extract_session_token(req, tok, sizeof(tok))) {
+        send_err(req, 401, "auth required");
+        return false;
+    }
+    if (!auth_check_session(tok)) {
+        send_err(req, 401, "invalid session");
+        return false;
+    }
+    return true;
+}
+
+/* ============================================================
+ *  Captive-portal redirect endpoints
+ *
+ *  iOS hits captive.apple.com / hotspot-detect.html / library/test/...
+ *  Android hits connectivitycheck.gstatic.com / generate_204
+ *  Win 11 hits msftconnecttest.com/connecttest.txt
+ *  All return a 302 redirect to our root so the OS pops the setup page.
+ * ============================================================ */
+
+static esp_err_t handle_captive_redirect(httpd_req_t *req) {
+    char ip[32] = "192.168.4.1";
+    netmgr_get_ip(ip, sizeof(ip));
+    char loc[64];
+    snprintf(loc, sizeof(loc), "http://%s/", ip);
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", loc);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+/* ============================================================
+ *  Root + static (placeholder HTML; PR #5 replaces with LittleFS-served Preact)
+ * ============================================================ */
+
+static const char k_placeholder_html[] =
+"<!doctype html>\n"
+"<html lang=\"en\" data-theme=\"dark\">\n"
+"<head>\n"
+"  <meta charset=\"utf-8\"/>\n"
+"  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"/>\n"
+"  <title>AmbiSense v6</title>\n"
+"  <style>\n"
+"    :root{--bg:#0B0D10;--card:#15181C;--line:#232830;--text:#F2F4F7;--mute:#8A929E;--acc:linear-gradient(135deg,#FFB54A,#FF7A3D 45%,#FF3D82);}\n"
+"    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;-webkit-font-smoothing:antialiased}\n"
+"    .wrap{max-width:520px;margin:0 auto;padding:32px 20px 80px}\n"
+"    h1{font-size:22px;margin:0 0 4px;letter-spacing:-.02em}.sub{color:var(--mute);font-size:13px;margin-bottom:24px}\n"
+"    .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;margin-bottom:14px}\n"
+"    .card h2{font-size:13px;margin:0 0 12px;color:var(--mute);text-transform:uppercase;letter-spacing:.14em;font-weight:500}\n"
+"    label{display:block;font-size:12px;color:var(--mute);margin:10px 0 6px}\n"
+"    input,select{width:100%;padding:10px 12px;background:#101317;border:1px solid var(--line);border-radius:8px;color:var(--text);font:inherit}\n"
+"    input:focus,select:focus{outline:none;border-color:#FF7A3D}\n"
+"    button{display:block;width:100%;padding:12px;border:0;border-radius:8px;background:var(--acc);color:#1A0F08;font-weight:600;font-size:14px;margin-top:14px;cursor:pointer}\n"
+"    .row{display:flex;justify-content:space-between;font-size:12px;color:var(--mute);padding:6px 0}\n"
+"    .row b{color:var(--text);font-weight:500;font-family:ui-monospace,Menlo,Consolas,monospace}\n"
+"    .ok{color:#4ADE80}.err{color:#FF5470}.hint{font-size:12px;color:var(--mute);margin-top:8px}\n"
+"    .banner{background:#1B1F24;border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--mute);margin-bottom:14px}\n"
+"  </style>\n"
+"</head>\n"
+"<body>\n"
+"  <div class=\"wrap\">\n"
+"    <h1>AmbiSense v6</h1>\n"
+"    <div class=\"sub\">Setup &amp; status. The full UI ships in the next firmware update.</div>\n"
+"    <div class=\"banner\">Authentication is <b id=\"auth-status\">…</b>. Set a password under System &gt; Security after Wi-Fi setup.</div>\n"
+"\n"
+"    <div class=\"card\">\n"
+"      <h2>Wi-Fi</h2>\n"
+"      <label>Network</label>\n"
+"      <select id=\"ssid\"><option value=\"\">Scanning…</option></select>\n"
+"      <label>Password</label>\n"
+"      <input id=\"pass\" type=\"password\" autocomplete=\"current-password\"/>\n"
+"      <label>Device hostname</label>\n"
+"      <input id=\"host\" placeholder=\"ambisense-living\"/>\n"
+"      <button onclick=\"saveWifi()\">Save &amp; connect</button>\n"
+"      <div class=\"hint\" id=\"wifi-hint\"></div>\n"
+"    </div>\n"
+"\n"
+"    <div class=\"card\">\n"
+"      <h2>Device</h2>\n"
+"      <div class=\"row\"><span>Firmware</span><b id=\"fw\">…</b></div>\n"
+"      <div class=\"row\"><span>Board</span><b id=\"board\">…</b></div>\n"
+"      <div class=\"row\"><span>IP</span><b id=\"ip\">…</b></div>\n"
+"      <div class=\"row\"><span>Hostname</span><b id=\"hn\">…</b></div>\n"
+"      <div class=\"row\"><span>Free heap</span><b id=\"heap\">…</b></div>\n"
+"      <div class=\"row\"><span>Uptime</span><b id=\"up\">…</b></div>\n"
+"    </div>\n"
+"\n"
+"    <div class=\"card\">\n"
+"      <h2>Firmware update (OTA)</h2>\n"
+"      <input id=\"binFile\" type=\"file\" accept=\".bin\"/>\n"
+"      <button onclick=\"doOta()\" id=\"otaBtn\">Upload firmware</button>\n"
+"      <div class=\"hint\" id=\"ota-hint\"></div>\n"
+"    </div>\n"
+"  </div>\n"
+"<script>\n"
+"async function fetchJson(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error(r.status);return r.json()}\n"
+"async function loadVer(){try{const v=await fetchJson('/api/version');document.getElementById('fw').textContent=v.version;document.getElementById('ip').textContent=v.ip||'—';document.getElementById('hn').textContent=v.hostname||'—';document.getElementById('heap').textContent=Math.round(v.free_heap/1024)+' KB';document.getElementById('up').textContent=v.uptime_s+' s';document.getElementById('board').textContent=v.board||'—';document.getElementById('auth-status').textContent=v.auth_enabled?'enabled':'OFF (open)';document.getElementById('auth-status').className=v.auth_enabled?'ok':'err';}catch(e){}}\n"
+"async function loadScan(){try{const r=await fetchJson('/api/wifi/scan');const sel=document.getElementById('ssid');sel.innerHTML='';for(const n of r.networks){const o=document.createElement('option');o.value=n.ssid;o.textContent=`${n.ssid}  (${n.rssi} dBm${n.secure?', 🔒':''})`;sel.appendChild(o);}}catch(e){document.getElementById('ssid').innerHTML='<option value=\"\">scan failed</option>';}}\n"
+"async function saveWifi(){const ssid=document.getElementById('ssid').value;const pass=document.getElementById('pass').value;const host=document.getElementById('host').value;const h=document.getElementById('wifi-hint');h.textContent='Saving…';try{await fetch('/api/wifi',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid,pass,hostname:host||undefined})});h.textContent='Saved. Device is reconnecting; if it joins your network, look for it at the new hostname.';h.className='hint ok';}catch(e){h.textContent='Save failed: '+e.message;h.className='hint err';}}\n"
+"async function doOta(){const f=document.getElementById('binFile').files[0];if(!f){return;}const h=document.getElementById('ota-hint');const b=document.getElementById('otaBtn');b.disabled=true;h.textContent='Uploading '+(f.size>>10)+' KB…';try{const r=await fetch('/api/ota',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:f});const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);h.textContent='Flashed. Device is rebooting. Refresh in 30 s.';h.className='hint ok';}catch(e){h.textContent='OTA failed: '+e.message;h.className='hint err';b.disabled=false;}}\n"
+"loadVer();loadScan();setInterval(loadVer,5000);\n"
+"</script>\n"
+"</body></html>\n";
+
+static esp_err_t handle_root(httpd_req_t *req) {
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, k_placeholder_html, sizeof(k_placeholder_html) - 1);
+}
+
+/* ============================================================
+ *  /api/version
+ * ============================================================ */
+static esp_err_t handle_version(httpd_req_t *req) {
+    const esp_app_desc_t *app = esp_app_get_description();
+    cJSON *r = cJSON_CreateObject();
+
+    cJSON_AddStringToObject(r, "version", app->version);
+    cJSON_AddStringToObject(r, "idf_version", app->idf_ver);
+    cJSON_AddStringToObject(r, "build_date", app->date);
+    cJSON_AddStringToObject(r, "build_time", app->time);
+    cJSON_AddStringToObject(r, "target", CONFIG_IDF_TARGET);
+
+    cJSON_AddNumberToObject(r, "free_heap", esp_get_free_heap_size());
+    cJSON_AddNumberToObject(r, "min_free_heap", esp_get_minimum_free_heap_size());
+    cJSON_AddNumberToObject(r, "uptime_s", (uint32_t)(esp_timer_get_time() / 1000000));
+
+    char buf[64];
+    if (netmgr_get_ip(buf, sizeof(buf)) == ESP_OK) cJSON_AddStringToObject(r, "ip", buf);
+    if (netmgr_get_hostname(buf, sizeof(buf)) == ESP_OK) cJSON_AddStringToObject(r, "hostname", buf);
+    cJSON_AddNumberToObject(r, "rssi", netmgr_get_rssi());
+    cJSON_AddBoolToObject(r, "sta_connected", netmgr_is_sta_connected());
+    cJSON_AddBoolToObject(r, "auth_enabled", auth_is_enabled());
+
+    char board_id[32] = {0};
+    if (settings_get_board_id(board_id, sizeof(board_id)) != ESP_OK) {
+        const board_profile_t *def = board_default_profile();
+        if (def) snprintf(board_id, sizeof(board_id), "%s", def->id);
+    }
+    cJSON_AddStringToObject(r, "board", board_id);
+
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    char macstr[18];
+    snprintf(macstr, sizeof(macstr), "%02x:%02x:%02x:%02x:%02x:%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    cJSON_AddStringToObject(r, "mac", macstr);
+
+    return send_json(req, r);
+}
+
+/* ============================================================
+ *  /api/wifi/scan, /api/wifi
+ * ============================================================ */
+static esp_err_t handle_wifi_scan(httpd_req_t *req) {
+    if (!gate_auth(req)) return ESP_OK;
+
+    wifi_scan_config_t cfg = {0};
+    cfg.show_hidden = false;
+    esp_err_t err = esp_wifi_scan_start(&cfg, true);
+    if (err != ESP_OK) return send_err(req, 500, "scan failed");
+
+    uint16_t n = 0;
+    esp_wifi_scan_get_ap_num(&n);
+    if (n > 30) n = 30;
+    wifi_ap_record_t *aps = calloc(n, sizeof(*aps));
+    if (!aps) return send_err(req, 500, "oom");
+    esp_wifi_scan_get_ap_records(&n, aps);
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON *arr = cJSON_AddArrayToObject(r, "networks");
+    for (uint16_t i = 0; i < n; ++i) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "ssid", (const char *)aps[i].ssid);
+        cJSON_AddNumberToObject(o, "rssi", aps[i].rssi);
+        cJSON_AddNumberToObject(o, "channel", aps[i].primary);
+        cJSON_AddBoolToObject(o, "secure", aps[i].authmode != WIFI_AUTH_OPEN);
+        cJSON_AddItemToArray(arr, o);
+    }
+    free(aps);
+    return send_json(req, r);
+}
+
+/* Apply Wi-Fi creds on a separate task so the HTTP response can flush before
+ * STA disconnects. The struct + task pair below is the deferred-apply path. */
+struct wifi_apply_args { char ssid[33]; char pass[65]; };
+static void wifi_apply_task(void *arg) {
+    struct wifi_apply_args *a = arg;
+    vTaskDelay(pdMS_TO_TICKS(500));
+    netmgr_set_credentials(a->ssid, a->pass);
+    free(a);
+    vTaskDelete(NULL);
+}
+
+static esp_err_t handle_wifi_post(httpd_req_t *req) {
+    if (!gate_auth(req)) return ESP_OK;
+    cJSON *j = read_body_json(req);
+    if (!j) return send_err(req, 400, "bad json");
+
+    cJSON *ssid = cJSON_GetObjectItem(j, "ssid");
+    cJSON *pass = cJSON_GetObjectItem(j, "pass");
+    cJSON *host = cJSON_GetObjectItem(j, "hostname");
+    if (host && cJSON_IsString(host) && host->valuestring[0]) {
+        netmgr_set_hostname(host->valuestring);
+    }
+    if (ssid && cJSON_IsString(ssid) && ssid->valuestring[0]) {
+        const char *p = (pass && cJSON_IsString(pass)) ? pass->valuestring : "";
+
+        struct wifi_apply_args *a = calloc(1, sizeof(*a));
+        if (!a) { cJSON_Delete(j); return send_err(req, 500, "oom"); }
+        snprintf(a->ssid, sizeof(a->ssid), "%s", ssid->valuestring);
+        snprintf(a->pass, sizeof(a->pass), "%s", p);
+
+        cJSON *r = cJSON_CreateObject();
+        cJSON_AddStringToObject(r, "status", "saved; reconnecting");
+        cJSON_AddStringToObject(r, "note", "AP remains available during STA join");
+        send_json(req, r);
+        cJSON_Delete(j);
+        xTaskCreate(wifi_apply_task, "wifi_apply", 4096, a, 4, NULL);
+        return ESP_OK;
+    }
+    cJSON_Delete(j);
+    return send_err(req, 400, "ssid required");
+}
+
+/* ============================================================
+ *  /api/auth/login, /api/auth/logout, /api/auth/password
+ * ============================================================ */
+static esp_err_t handle_login(httpd_req_t *req) {
+    cJSON *j = read_body_json(req);
+    if (!j) return send_err(req, 400, "bad json");
+    cJSON *p = cJSON_GetObjectItem(j, "password");
+    if (!p || !cJSON_IsString(p)) { cJSON_Delete(j); return send_err(req, 400, "password required"); }
+    bool ok = auth_check_password(p->valuestring);
+    cJSON_Delete(j);
+    if (!ok) return send_err(req, 401, "wrong password");
+
+    char tok[AUTH_TOKEN_HEX_LEN];
+    auth_issue_session(tok);
+    char cookie[160];
+    snprintf(cookie, sizeof(cookie),
+        "ambisense=%s; Path=/; Max-Age=86400; SameSite=Strict; HttpOnly", tok);
+    httpd_resp_set_hdr(req, "Set-Cookie", cookie);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", true);
+    return send_json(req, r);
+}
+
+static esp_err_t handle_logout(httpd_req_t *req) {
+    char tok[AUTH_TOKEN_HEX_LEN + 1];
+    if (extract_session_token(req, tok, sizeof(tok))) auth_revoke(tok);
+    httpd_resp_set_hdr(req, "Set-Cookie", "ambisense=; Path=/; Max-Age=0");
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", true);
+    return send_json(req, r);
+}
+
+static esp_err_t handle_set_password(httpd_req_t *req) {
+    if (auth_is_enabled() && !gate_auth(req)) return ESP_OK;
+    cJSON *j = read_body_json(req);
+    if (!j) return send_err(req, 400, "bad json");
+    cJSON *p = cJSON_GetObjectItem(j, "password");
+    const char *pw = (p && cJSON_IsString(p)) ? p->valuestring : NULL;
+    esp_err_t err = auth_set_password(pw);
+    cJSON_Delete(j);
+    if (err == ESP_ERR_INVALID_ARG) return send_err(req, 400, "min 8 chars");
+    if (err != ESP_OK) return send_err(req, 500, "save failed");
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", true);
+    cJSON_AddBoolToObject(r, "auth_enabled", auth_is_enabled());
+    return send_json(req, r);
+}
+
+/* ============================================================
+ *  /api/board/profiles, /api/board, /api/radar/kinds
+ * ============================================================ */
+static esp_err_t handle_board_profiles(httpd_req_t *req) {
+    size_t n = 0;
+    const board_profile_t *first = board_profiles(&n);
+    /* board_profiles returns the first profile pointer; we iterate via the
+     * static array in board.c — but its layout isn't exposed. Fall back to
+     * iterating known ids: we re-look-up each via board_profile_by_id. */
+    static const char *ids[] = {
+        "esp32c3-supermini", "esp32-devkit", "esp32s3-zero", "esp32c6-devkit"
+    };
+    cJSON *r = cJSON_CreateObject();
+    cJSON *arr = cJSON_AddArrayToObject(r, "profiles");
+    (void)first;
+    for (size_t i = 0; i < sizeof(ids)/sizeof(ids[0]); ++i) {
+        const board_profile_t *p = board_profile_by_id(ids[i]);
+        if (!p) continue;
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "id", p->id);
+        cJSON_AddStringToObject(o, "display", p->display);
+        cJSON_AddStringToObject(o, "mcu", p->mcu);
+        cJSON_AddBoolToObject (o, "validated", p->validated);
+        cJSON_AddNumberToObject(o, "led_pin", p->led_pin);
+        cJSON_AddNumberToObject(o, "radar_rx", p->radar_rx_pin);
+        cJSON_AddNumberToObject(o, "radar_tx", p->radar_tx_pin);
+        cJSON_AddNumberToObject(o, "button", p->button_pin);
+        cJSON_AddNumberToObject(o, "status_led", p->status_led_pin);
+        cJSON_AddNumberToObject(o, "max_gpio", p->max_gpio);
+        /* Encode unsafe pins as an array of pin numbers up to max_gpio. */
+        cJSON *unsafe = cJSON_AddArrayToObject(o, "unsafe");
+        for (uint8_t pin = 0; pin <= p->max_gpio; ++pin) {
+            if (board_pin_is_unsafe(p, pin)) cJSON_AddItemToArray(unsafe, cJSON_CreateNumber(pin));
+        }
+        cJSON_AddItemToArray(arr, o);
+    }
+    /* Active profile id */
+    char active[32] = {0};
+    if (settings_get_board_id(active, sizeof(active)) != ESP_OK) {
+        const board_profile_t *def = board_default_profile();
+        if (def) snprintf(active, sizeof(active), "%s", def->id);
+    }
+    cJSON_AddStringToObject(r, "active", active);
+    return send_json(req, r);
+}
+
+static esp_err_t handle_board_post(httpd_req_t *req) {
+    if (!gate_auth(req)) return ESP_OK;
+    cJSON *j = read_body_json(req);
+    if (!j) return send_err(req, 400, "bad json");
+    cJSON *id = cJSON_GetObjectItem(j, "id");
+    if (id && cJSON_IsString(id)) {
+        const board_profile_t *p = board_profile_by_id(id->valuestring);
+        if (!p) { cJSON_Delete(j); return send_err(req, 400, "unknown board id"); }
+        settings_set_board_id(p->id);
+    }
+    static const char *pkeys[] = { "led_pin", "radar_rx", "radar_tx", "button", "status_led" };
+    for (size_t i = 0; i < sizeof(pkeys)/sizeof(pkeys[0]); ++i) {
+        cJSON *v = cJSON_GetObjectItem(j, pkeys[i]);
+        if (v && cJSON_IsNumber(v)) {
+            uint8_t pin = (uint8_t)v->valueint;
+            settings_set_pin_override(pkeys[i], pin);
+        }
+    }
+    cJSON *rk = cJSON_GetObjectItem(j, "radar_kind");
+    if (rk && cJSON_IsString(rk)) settings_set_radar_kind(rk->valuestring);
+
+    cJSON_Delete(j);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", true);
+    cJSON_AddStringToObject(r, "note", "reboot to apply");
+    return send_json(req, r);
+}
+
+static esp_err_t handle_radar_kinds(httpd_req_t *req) {
+    cJSON *r = cJSON_CreateObject();
+    cJSON *arr = cJSON_AddArrayToObject(r, "kinds");
+    static const struct { const char *id; const char *display; bool xy; const char *note; } K[] = {
+        { "ld2410", "HiLink LD2410(B/C)", false, "single-target distance + presence (24 GHz)" },
+        { "ld2412", "HiLink LD2412",      false, "per-gate sensitivity tunable (24 GHz)" },
+        { "ld2420", "HiLink LD2420",      false, "presence only (24 GHz)" },
+        { "ld2450", "HiLink LD2450",      true,  "up to 3 targets, x/y/speed (24 GHz)" },
+        { "sim",    "Simulator",          true,  "synthetic distance traces for testing" },
+    };
+    for (size_t i = 0; i < sizeof(K)/sizeof(K[0]); ++i) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "id", K[i].id);
+        cJSON_AddStringToObject(o, "display", K[i].display);
+        cJSON_AddBoolToObject (o, "provides_xy", K[i].xy);
+        cJSON_AddStringToObject(o, "note", K[i].note);
+        cJSON_AddItemToArray(arr, o);
+    }
+    char active[16] = {0};
+    settings_get_radar_kind(active, sizeof(active));
+    cJSON_AddStringToObject(r, "active", active[0] ? active : "ld2410");
+    return send_json(req, r);
+}
+
+/* ============================================================
+ *  /api/settings — flat read of every NVS namespace; PR #3/#4 expand the writer
+ * ============================================================ */
+
+static void add_str_if(cJSON *j, const char *ns, const char *key, const char *json_key) {
+    char buf[80];
+    if (settings_get_str(ns, key, buf, sizeof(buf)) == ESP_OK) {
+        cJSON_AddStringToObject(j, json_key, buf);
+    }
+}
+static void add_u32_if(cJSON *j, const char *ns, const char *key, const char *json_key) {
+    uint32_t v;
+    if (settings_get_u32(ns, key, &v) == ESP_OK) cJSON_AddNumberToObject(j, json_key, v);
+}
+static void add_i32_if(cJSON *j, const char *ns, const char *key, const char *json_key) {
+    int32_t v;
+    if (settings_get_i32(ns, key, &v) == ESP_OK) cJSON_AddNumberToObject(j, json_key, v);
+}
+static void add_u8_if(cJSON *j, const char *ns, const char *key, const char *json_key) {
+    uint8_t v;
+    if (settings_get_u8(ns, key, &v) == ESP_OK) cJSON_AddNumberToObject(j, json_key, v);
+}
+
+static esp_err_t handle_settings_get(httpd_req_t *req) {
+    cJSON *r = cJSON_CreateObject();
+
+    add_str_if(r, "sys", "name", "device_name");
+    add_str_if(r, "wifi", "host", "hostname");
+    add_str_if(r, "wifi", "ssid", "wifi_ssid");
+
+    add_str_if(r, "board", "id", "board_id");
+    add_str_if(r, "board", "radar_kind", "radar_kind");
+    add_u8_if (r, "board", "led_pin", "led_pin");
+    add_u8_if (r, "board", "radar_rx", "radar_rx");
+    add_u8_if (r, "board", "radar_tx", "radar_tx");
+    add_u8_if (r, "board", "button", "button_pin");
+    add_u8_if (r, "board", "status_led", "status_led_pin");
+
+    /* LED settings (PR #3 will start writing these) */
+    add_u32_if(r, "led", "count", "led_count");
+    add_u8_if (r, "led", "br", "brightness");
+    add_u8_if (r, "led", "r", "r");
+    add_u8_if (r, "led", "g", "g");
+    add_u8_if (r, "led", "b", "b");
+    add_u8_if (r, "led", "mode", "light_mode");
+    add_u32_if(r, "led", "span", "span");
+    add_i32_if(r, "led", "ctr", "center_shift");
+    add_u8_if (r, "led", "trail", "trail");
+    add_u8_if (r, "led", "dirlt", "dir_light");
+    add_u8_if (r, "led", "bg", "bg_mode");
+    add_u8_if (r, "led", "espd", "effect_speed");
+    add_u8_if (r, "led", "eint", "effect_intensity");
+
+    /* Distance window */
+    add_u32_if(r, "dist", "min", "min_distance");
+    add_u32_if(r, "dist", "max", "max_distance");
+
+    /* Motion smoothing */
+    add_u8_if (r, "motion", "en", "motion_enabled");
+    add_u32_if(r, "motion", "ps", "pos_smooth_x1k");
+    add_u32_if(r, "motion", "vs", "vel_smooth_x1k");
+    add_u32_if(r, "motion", "pf", "predict_x1k");
+    add_u32_if(r, "motion", "pg", "p_gain_x1k");
+    add_u32_if(r, "motion", "ig", "i_gain_x1k");
+
+    /* Topology */
+    add_u8_if (r, "topo", "kind", "topology");
+    add_u32_if(r, "topo", "tot", "total_leds");
+
+    cJSON_AddBoolToObject(r, "auth_enabled", auth_is_enabled());
+    return send_json(req, r);
+}
+
+static const struct setting_map {
+    const char *json_key;
+    const char *ns;
+    const char *nvs_key;
+    char type;  /* 's' string, '8', '4' u32/i32, 'i' int8 */
+} SETTINGS[] = {
+    { "device_name",      "sys",    "name",       's' },
+    { "hostname",         "wifi",   "host",       's' },
+    { "led_count",        "led",    "count",      '4' },
+    { "brightness",       "led",    "br",         '8' },
+    { "r",                "led",    "r",          '8' },
+    { "g",                "led",    "g",          '8' },
+    { "b",                "led",    "b",          '8' },
+    { "light_mode",       "led",    "mode",       '8' },
+    { "span",             "led",    "span",       '4' },
+    { "center_shift",     "led",    "ctr",        'i' },
+    { "trail",            "led",    "trail",      '8' },
+    { "dir_light",        "led",    "dirlt",      '8' },
+    { "bg_mode",          "led",    "bg",         '8' },
+    { "effect_speed",     "led",    "espd",       '8' },
+    { "effect_intensity", "led",    "eint",       '8' },
+    { "min_distance",     "dist",   "min",        '4' },
+    { "max_distance",     "dist",   "max",        '4' },
+    { "motion_enabled",   "motion", "en",         '8' },
+    { "pos_smooth_x1k",   "motion", "ps",         '4' },
+    { "vel_smooth_x1k",   "motion", "vs",         '4' },
+    { "predict_x1k",      "motion", "pf",         '4' },
+    { "p_gain_x1k",       "motion", "pg",         '4' },
+    { "i_gain_x1k",       "motion", "ig",         '4' },
+    { "topology",         "topo",   "kind",       '8' },
+    { "total_leds",       "topo",   "tot",        '4' },
+};
+
+static esp_err_t handle_settings_post(httpd_req_t *req) {
+    if (!gate_auth(req)) return ESP_OK;
+    cJSON *j = read_body_json(req);
+    if (!j) return send_err(req, 400, "bad json");
+
+    int updated = 0;
+    for (size_t i = 0; i < sizeof(SETTINGS)/sizeof(SETTINGS[0]); ++i) {
+        cJSON *v = cJSON_GetObjectItem(j, SETTINGS[i].json_key);
+        if (!v) continue;
+        switch (SETTINGS[i].type) {
+            case 's':
+                if (cJSON_IsString(v)) { settings_set_str(SETTINGS[i].ns, SETTINGS[i].nvs_key, v->valuestring); updated++; }
+                break;
+            case '4':
+                if (cJSON_IsNumber(v)) { settings_set_u32(SETTINGS[i].ns, SETTINGS[i].nvs_key, (uint32_t)v->valuedouble); updated++; }
+                break;
+            case 'i':
+                if (cJSON_IsNumber(v)) { settings_set_i32(SETTINGS[i].ns, SETTINGS[i].nvs_key, (int32_t)v->valuedouble); updated++; }
+                break;
+            case '8':
+                if (cJSON_IsNumber(v)) { settings_set_u8(SETTINGS[i].ns, SETTINGS[i].nvs_key, (uint8_t)v->valueint); updated++; }
+                else if (cJSON_IsBool(v)) { settings_set_u8(SETTINGS[i].ns, SETTINGS[i].nvs_key, cJSON_IsTrue(v) ? 1 : 0); updated++; }
+                break;
+        }
+    }
+    cJSON_Delete(j);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", true);
+    cJSON_AddNumberToObject(r, "updated", updated);
+    return send_json(req, r);
+}
+
+/* ============================================================
+ *  /api/distance + /api/live (WebSocket)
+ * ============================================================ */
+static esp_err_t handle_distance(httpd_req_t *req) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", s_web.latest.distance_cm);
+    httpd_resp_set_type(req, "text/plain");
+    return httpd_resp_send(req, buf, strlen(buf));
+}
+
+static esp_err_t handle_ws(httpd_req_t *req) {
+    if (req->method == HTTP_GET) {
+        /* Handshake. Save fd. */
+        int fd = httpd_req_to_sockfd(req);
+        xSemaphoreTake(s_web.lock, portMAX_DELAY);
+        for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
+            if (s_web.ws_fds[i] == 0) { s_web.ws_fds[i] = fd; break; }
+        }
+        xSemaphoreGive(s_web.lock);
+        ESP_LOGI(TAG, "WS client connected, fd=%d", fd);
+        return ESP_OK;
+    }
+    return ESP_OK;
+}
+
+static void ws_broadcast_task(void *arg) {
+    (void)arg;
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(200));  /* 5 Hz */
+
+        webui_live_t snap;
+        xSemaphoreTake(s_web.lock, portMAX_DELAY);
+        snap = s_web.latest;
+        snap.free_heap = esp_get_free_heap_size();
+        snap.uptime_s = (uint32_t)(esp_timer_get_time() / 1000000);
+        snap.rssi = netmgr_get_rssi();
+        xSemaphoreGive(s_web.lock);
+
+        char json[160];
+        int n = snprintf(json, sizeof(json),
+            "{\"distance\":%d,\"direction\":%d,\"rssi\":%d,\"heap\":%" PRIu32 ",\"uptime\":%" PRIu32 ",\"peers\":%u,\"healthy\":%u}",
+            snap.distance_cm, snap.direction, snap.rssi,
+            snap.free_heap, snap.uptime_s, snap.peer_count, snap.peer_healthy);
+
+        httpd_ws_frame_t f = {
+            .final = true, .fragmented = false,
+            .type = HTTPD_WS_TYPE_TEXT,
+            .payload = (uint8_t *)json, .len = n,
+        };
+        xSemaphoreTake(s_web.lock, portMAX_DELAY);
+        for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
+            if (s_web.ws_fds[i] == 0) continue;
+            esp_err_t err = httpd_ws_send_frame_async(s_web.srv, s_web.ws_fds[i], &f);
+            if (err != ESP_OK) {
+                /* Client gone — drop fd. */
+                s_web.ws_fds[i] = 0;
+            }
+        }
+        xSemaphoreGive(s_web.lock);
+    }
+}
+
+void webui_publish_live(const webui_live_t *snap) {
+    if (!snap) return;
+    xSemaphoreTake(s_web.lock, portMAX_DELAY);
+    s_web.latest = *snap;
+    xSemaphoreGive(s_web.lock);
+}
+
+/* ============================================================
+ *  /api/ota  — POST application/octet-stream firmware upload
+ * ============================================================ */
+static esp_err_t handle_ota(httpd_req_t *req) {
+    if (!gate_auth(req)) return ESP_OK;
+    if (req->content_len == 0) return send_err(req, 400, "empty body");
+
+    ota_session_t *s = ota_begin(req->content_len);
+    if (!s) return send_err(req, 500, "ota_begin failed");
+
+    char buf[1024];
+    int total = 0;
+    while (total < (int)req->content_len) {
+        int n = httpd_req_recv(req, buf, sizeof(buf));
+        if (n <= 0) { ota_abort(s); return send_err(req, 500, "recv failed"); }
+        if (ota_write(s, buf, n) != ESP_OK) return send_err(req, 500, "write failed");
+        total += n;
+    }
+    if (ota_finish(s) != ESP_OK) return send_err(req, 500, "validate failed");
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", true);
+    cJSON_AddNumberToObject(r, "bytes", total);
+    cJSON_AddStringToObject(r, "note", "rebooting in 1 s");
+    return send_json(req, r);
+}
+
+/* ============================================================
+ *  Server lifecycle
+ * ============================================================ */
+
+static const httpd_uri_t k_routes[] = {
+    /* Root + captive-portal redirects */
+    { "/",                               HTTP_GET,  handle_root,             NULL },
+    { "/generate_204",                   HTTP_GET,  handle_captive_redirect, NULL },
+    { "/gen_204",                        HTTP_GET,  handle_captive_redirect, NULL },
+    { "/hotspot-detect.html",            HTTP_GET,  handle_captive_redirect, NULL },
+    { "/library/test/success.html",      HTTP_GET,  handle_captive_redirect, NULL },
+    { "/connecttest.txt",                HTTP_GET,  handle_captive_redirect, NULL },
+    { "/redirect",                       HTTP_GET,  handle_captive_redirect, NULL },
+    { "/ncsi.txt",                       HTTP_GET,  handle_captive_redirect, NULL },
+
+    /* API */
+    { "/api/version",                    HTTP_GET,  handle_version,          NULL },
+    { "/api/wifi/scan",                  HTTP_GET,  handle_wifi_scan,        NULL },
+    { "/api/wifi",                       HTTP_POST, handle_wifi_post,        NULL },
+    { "/api/auth/login",                 HTTP_POST, handle_login,            NULL },
+    { "/api/auth/logout",                HTTP_POST, handle_logout,           NULL },
+    { "/api/auth/password",              HTTP_POST, handle_set_password,     NULL },
+    { "/api/board/profiles",             HTTP_GET,  handle_board_profiles,   NULL },
+    { "/api/board",                      HTTP_POST, handle_board_post,       NULL },
+    { "/api/radar/kinds",                HTTP_GET,  handle_radar_kinds,      NULL },
+    { "/api/settings",                   HTTP_GET,  handle_settings_get,     NULL },
+    { "/api/settings",                   HTTP_POST, handle_settings_post,    NULL },
+    { "/api/distance",                   HTTP_GET,  handle_distance,         NULL },
+    { "/api/ota",                        HTTP_POST, handle_ota,              NULL },
+};
+
+esp_err_t webui_init(void) {
+    if (s_web.srv) return ESP_OK;
+    s_web.lock = xSemaphoreCreateMutex();
+
+    httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+    cfg.lru_purge_enable = true;
+    cfg.max_uri_handlers = 32;
+    cfg.max_open_sockets = 7;
+    cfg.stack_size = 8192;
+    cfg.recv_wait_timeout = 10;
+    cfg.send_wait_timeout = 10;
+
+    esp_err_t err = httpd_start(&s_web.srv, &cfg);
+    if (err != ESP_OK) { ESP_LOGE(TAG, "httpd_start: 0x%x", err); return err; }
+
+    for (size_t i = 0; i < sizeof(k_routes)/sizeof(k_routes[0]); ++i) {
+        httpd_register_uri_handler(s_web.srv, &k_routes[i]);
+    }
+
+    /* Live-data WS */
+    static const httpd_uri_t ws_route = {
+        .uri = "/api/live", .method = HTTP_GET,
+        .handler = handle_ws, .user_ctx = NULL,
+        .is_websocket = true, .handle_ws_control_frames = false,
+    };
+    httpd_register_uri_handler(s_web.srv, &ws_route);
+
+    xTaskCreate(ws_broadcast_task, "ws_bcast", 4096, NULL, 3, NULL);
+
+    ESP_LOGI(TAG, "Web server listening on :80 (%zu routes + ws)",
+             sizeof(k_routes)/sizeof(k_routes[0]) + 1);
+    return ESP_OK;
+}

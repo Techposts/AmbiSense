@@ -23,6 +23,10 @@
 #include "board.h"
 #include "settings.h"
 #include "status_led.h"
+#include "netmgr.h"
+#include "auth.h"
+#include "webui.h"
+#include "ota.h"
 
 static const char *TAG = "ambisense";
 
@@ -104,12 +108,19 @@ void app_main(void) {
              runtime.button_pin, runtime.status_led_pin,
              runtime.uart_num, runtime.rmt_channel);
 
-    ESP_LOGI(TAG, "Skeleton boot complete. Subsystems (Wi-Fi, web, radar, LEDs, mesh) "
-                  "land in subsequent PRs.");
+    /* Auth (off until password set), Wi-Fi (always-on AP + optional STA),
+     * web server (port 80, every API endpoint plus captive portal). */
+    auth_init();
+    netmgr_init();
+    webui_init();
 
-    /* Flip to AP_MODE pattern as a placeholder until PR #2 wires Wi-Fi. */
-    status_led_set_pattern(STATUS_LED_AP_MODE);
+    /* If we're running on a freshly-flashed image with rollback armed, mark
+     * us valid so the bootloader doesn't revert on next reset. */
+    ota_mark_valid();
 
-    /* app_main returns; FreeRTOS keeps status_led_task and the IDF event
-     * loop running. No busy loop needed here. */
+    /* Status LED follows Wi-Fi state from here. */
+    status_led_set_pattern(netmgr_is_sta_connected() ? STATUS_LED_STA_MODE : STATUS_LED_AP_MODE);
+
+    ESP_LOGI(TAG, "Boot complete. Web UI on http://%s.local/ (when STA up) or AP \"AmbiSense-XXXX\" → 192.168.4.1.", "ambisense");
+    /* app_main returns; FreeRTOS owns the device. */
 }

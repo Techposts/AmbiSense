@@ -115,3 +115,44 @@ _[tool: fork_verifier_agent]_
 
 Do something for AmbISense logo, may be light it up or make it bigger or like rethink please...
 
+## Assistant
+
+I'll redesign the logo with more presence and animation that ties to the radar/LED hardware concept.
+
+_[tool: snip]_
+
+_[tool: read_file]_
+
+I'll design a custom logo mark — a stylized radar-pulse "A" with concentric rings that pulse live, plus a wordmark with proper typographic care.
+
+_[tool: str_replace_edit]_
+
+_[tool: snip]_
+
+_[tool: str_replace_edit]_
+
+Now define the Logo component. I'll insert it before Header in app.jsx:
+
+_[tool: str_replace_edit]_
+
+_[tool: snip]_
+
+_[tool: done]_
+
+_[tool: snip]_
+
+_[tool: save_screenshot]_
+
+_[tool: view_image]_
+
+The new logo looks great — animated radar pulses emanating from the base of a triangular "A" mark, with a glowing core dot, gradient stroke chip body, and a refined wordmark where "Sense" picks up the amber→pink gradient. The outer glow breathes in sync with live distance data, so the logo is literally responsive to the radar.
+
+_[tool: snip]_
+
+The redesigned AmbiSense logo:
+
+- **Pulsing radar mark** — a triangular "A" emitter with three concentric rings expanding outward from a glowing core dot at its base, animated continuously to evoke the mmWave radar
+- **Live-reactive glow** — the soft halo around the mark breathes harder when the radar sees something close
+- **Wordmark** — "Ambi" in solid foreground, "Sense" picks up the amber→pink accent gradient, with a versioned monospace tag underneath
+- **Bigger presence** in the sidebar (42 px mark, 18 px wordmark) and a clean compact mark-only version in the mobile header
+
