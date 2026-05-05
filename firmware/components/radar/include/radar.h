@@ -59,6 +59,19 @@ esp_err_t radar_read(radar_frame_t *out, TickType_t timeout);
 /* For the simulator driver — replay a scripted trace. */
 esp_err_t radar_sim_push_trace(const int16_t *distances_cm, size_t n, uint32_t period_ms);
 
+/* Diagnostics: helps debug "distance is always 0" — tells you whether
+ * UART bytes are even arriving from the radar. */
+typedef struct {
+    char     driver_id[16];
+    uint32_t total_bytes_rx;       /* bytes read from UART since boot */
+    uint32_t total_frames_parsed;  /* successfully parsed radar frames */
+    uint32_t last_frame_age_ms;    /* 0 if never; UINT32_MAX if stale */
+    uint8_t  last_bytes[64];       /* most recent raw bytes for hex dump */
+    size_t   last_bytes_len;
+} radar_diag_t;
+
+void radar_get_diag(radar_diag_t *out);
+
 #ifdef __cplusplus
 }
 #endif

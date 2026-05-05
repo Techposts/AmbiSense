@@ -1,7 +1,8 @@
 /** All seven screens: Live, LEDs, Motion, Mesh, Hardware, Network, System. */
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { Card, Toggle, Field, Slider, Row, Dot, ColorPicker, useToaster } from './components';
 import { LedPreview, LED_MODE_NAMES } from './led_preview';
+import { Icon, Sparkline, fmtUptime } from './atoms';
 import { getJSON, postJSON, postBinary } from './api';
 
 /* Static CSS-gradient thumbnails for the 11 mode cards. One animated
@@ -48,73 +49,193 @@ function Section({ title, sub, right, children }: any) {
 /* ----------------------------------------------------------------- */
 /*                          A. Live dashboard                        */
 /* ----------------------------------------------------------------- */
-export function ScreenLive({ live, version, settings }: AppState) {
-  const dist = live.distance || 0;
+export function ScreenLive({ live, version, settings, setToast }: AppState) {
+  const dist = Math.round(live.distance || 0);
   const minD = settings.min_distance ?? 30;
   const maxD = settings.max_distance ?? 300;
-  const pct = Math.max(0, Math.min(100, ((dist - minD) / Math.max(1, maxD - minD)) * 100));
+  const inWindow = dist >= minD && dist <= maxD;
+
+  /* Client-side ring buffer of last 80 samples (~16 s @ 5 Hz). Faithful
+   * to the design — gives the sparkline its rolling shape. */
+  const histRef = useRef<number[]>(Array(80).fill(0));
+  const [hist, setHist] = useState<number[]>(histRef.current);
+  useEffect(() => {
+    histRef.current = [...histRef.current.slice(1), dist];
+    setHist(histRef.current);
+  }, [dist]);
+
+  /* System enable toggle (real /api/system) */
+  const [sysEn, setSysEn] = useState<boolean>(true);
+  useEffect(() => {
+    getJSON('/api/system').then(r => setSysEn(!!r.enabled)).catch(() => {});
+  }, []);
+  const toggleSys = async () => {
+    const next = !sysEn;
+    setSysEn(next);
+    try { await postJSON('/api/system', { enabled: next }); }
+    catch (e: any) { setSysEn(!next); setToast(e.message || 'Toggle failed', 'err'); }
+  };
+
   return (
-    <Section title="Live" sub={`Real-time view of ${version.hostname || 'device'}`}>
-      <div class="grid-cards">
-        <Card title="Distance">
-          <div class="distance-meter">
-            <div>
-              <span class="distance-num">{dist}</span>
-              <span class="distance-unit">cm</span>
-            </div>
-            <div class="bar"><div class="bar-fill" style={`width: ${pct}%`} /></div>
-            <div style="display: flex; justify-content: space-between; margin-top: 6px; font-size: 11px; color: var(--text-3);">
-              <span>{minD} cm</span>
-              <span>direction: {live.direction === 0 ? '—' : live.direction < 0 ? 'closer' : 'away'}</span>
-              <span>{maxD} cm</span>
-            </div>
-          </div>
-        </Card>
-        <Card title="LED preview">
-          <LedPreview
-            mode={settings.light_mode ?? 0}
-            rgb={[settings.r ?? 255, settings.g ?? 255, settings.b ?? 255]}
-            count={settings.led_count ?? 30}
-            brightness={settings.brightness ?? 80}
-            span={settings.span ?? 30}
-            distance={dist}
-            minD={minD}
-            maxD={maxD}
-            speed={settings.effect_speed}
-            intensity={settings.effect_intensity}
-          />
-          <div style="margin-top: 10px; font-size: 12px; color: var(--text-2);">
-            Mode: <b style="color: var(--text-0);">{LED_MODE_NAMES[settings.light_mode ?? 0]}</b>
-            {' · '}{settings.led_count ?? 30} LEDs
-          </div>
-        </Card>
-        <Card title="Device">
-          <Row k="firmware" v={<span class="mono">{version.version || '—'}</span>} />
-          <Row k="board" v={version.board || '—'} />
-          <Row k="ip" v={<span class="mono">{version.ip || 'AP only'}</span>} />
-          <Row k="hostname" v={<span class="mono">{version.hostname || '—'}</span>} />
-          <Row k="rssi" v={live.rssi ? `${live.rssi} dBm` : 'AP'} />
-          <Row k="free heap" v={`${Math.round(live.heap/1024)} KB`} />
-          <Row k="uptime" v={fmtUptime(live.uptime)} />
-        </Card>
-        <Card title="Mesh">
-          <Row k="peers" v={`${live.peers || 0}`} />
-          <Row k="healthy" v={`${live.healthy || 0}`} />
-          <div style="margin-top: 10px; font-size: 12px; color: var(--text-3);">
-            ESP-NOW peer mesh activates in PR #4. Each device drives its own strip; readings broadcast at 5 Hz.
-          </div>
-        </Card>
+    <>
+      <div class="page-head">
+        <div>
+          <h1>Live</h1>
+          <div class="sub">Real-time radar, mesh, and LED output</div>
+        </div>
+        <div style="display: flex; gap: 10px; align-items: center;">
+          <span class="chip"><span class="dot dot-ok"/> WS connected · 5 Hz</span>
+        </div>
       </div>
-    </Section>
+
+      {/* System enable hero — gradient when active */}
+      <div class="card" style={`padding: 18px; display: flex; align-items: center; gap: 16px; margin-bottom: 14px; ${sysEn ? 'background: linear-gradient(135deg, rgba(255,181,74,0.06), rgba(255,61,130,0.06)); border-color: rgba(255,122,61,0.25);' : ''}`}>
+        <div style={`width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; background: ${sysEn ? 'var(--acc-grad)' : 'var(--bg-3)'}; color: ${sysEn ? '#1A0F08' : 'var(--text-3)'};`}>
+          <Icon name="bolt" size={22} stroke={2}/>
+        </div>
+        <div style="flex: 1;">
+          <div style="font-size: 15px; font-weight: 600;">System {sysEn ? 'active' : 'paused'}</div>
+          <div style="font-size: 12px; color: var(--text-2);">
+            {sysEn ? 'Radar, mesh, and LED output running' : 'All output muted, mesh idle'}
+          </div>
+        </div>
+        <Toggle large value={sysEn} onChange={toggleSys}/>
+      </div>
+
+      <div class="dash-grid" style="display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 14px;">
+        {/* Left column */}
+        <div style="display: grid; gap: 14px;">
+          {/* Distance meter — big gradient number + sparkline */}
+          <div class="card" style="padding: 22px; position: relative; overflow: hidden;">
+            <div class="distance-row">
+              <div>
+                <div class="smallcaps">Distance</div>
+                <div style="display: flex; align-items: baseline; gap: 8px; margin-top: 8px;">
+                  <span class="mono dist-big">{dist}</span>
+                  <span style="color: var(--text-2); font-size: 16px;">cm</span>
+                </div>
+                <div style="display: flex; gap: 10px; margin-top: 14px; align-items: center; flex-wrap: wrap;">
+                  <span class="chip" style={`color: ${inWindow ? 'var(--ok)' : 'var(--text-2)'};`}>
+                    <span class={`dot ${inWindow ? 'dot-ok' : 'dot-off'}`}/>
+                    {inWindow ? 'in window' : 'outside'}
+                  </span>
+                  <span class="chip">min {minD}</span>
+                  <span class="chip">max {maxD}</span>
+                  <span class="chip">{live.direction === 0 ? 'still' : live.direction < 0 ? 'closer →' : 'away →'}</span>
+                </div>
+              </div>
+              <div class="dist-spark">
+                <div style="position: relative;">
+                  <Sparkline data={hist} width={420} height={80} min={0} max={Math.max(300, maxD)}/>
+                  <div style="position: absolute; inset: 0; pointer-events: none;">
+                    <div style={`position: absolute; left: 0; right: 0; top: ${(1 - maxD/Math.max(300,maxD))*100}%; border-top: 1px dashed var(--text-4);`}/>
+                    <div style={`position: absolute; left: 0; right: 0; top: ${(1 - minD/Math.max(300,maxD))*100}%; border-top: 1px dashed var(--text-4);`}/>
+                  </div>
+                </div>
+                <div class="mono" style="font-size: 10px; color: var(--text-3); text-align: right; margin-top: 4px;">last 16 s · 5 Hz</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Strip preview */}
+          <div class="card" style="padding: 18px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+              <div class="smallcaps">Live LED preview</div>
+              <span class="chip mono">{settings.led_count ?? 30} px · {LED_MODE_NAMES[settings.light_mode ?? 0]}</span>
+            </div>
+            <LedPreview
+              mode={settings.light_mode ?? 0}
+              rgb={[settings.r ?? 255, settings.g ?? 255, settings.b ?? 255]}
+              count={settings.led_count ?? 30}
+              brightness={settings.brightness ?? 80}
+              span={settings.span ?? 30}
+              distance={dist}
+              minD={minD}
+              maxD={maxD}
+              speed={settings.effect_speed}
+              intensity={settings.effect_intensity}
+              height={64}
+            />
+            <div style="display: flex; justify-content: space-between; margin-top: 8px; font-size: 11px; color: var(--text-3);">
+              <span class="mono">px 0</span>
+              <span>{Math.round(((dist - minD) / Math.max(1, maxD - minD)) * 100)}% along</span>
+              <span class="mono">px {(settings.led_count ?? 30) - 1}</span>
+            </div>
+          </div>
+
+          {/* Stat tiles */}
+          <div class="stat-row" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;">
+            <StatTile label="Free heap" value={`${Math.round((live.heap||0)/1024)}`} sub="kB · stable"/>
+            <StatTile label="RSSI"      value={`${live.rssi||0}`} sub={(live.rssi||0) > -65 ? 'dBm · excellent' : (live.rssi||0) > -75 ? 'dBm · good' : 'dBm · weak'}/>
+            <StatTile label="Uptime"    value={fmtUptime(live.uptime||0).split(' ')[0]} sub={fmtUptime(live.uptime||0)}/>
+            <StatTile label="Cycle"     value="200" sub="ms · radar→led" accent/>
+          </div>
+        </div>
+
+        {/* Right column */}
+        <div style="display: grid; gap: 14px; align-content: start;">
+          {/* Device card */}
+          <div class="card">
+            <div style="display: flex; align-items: center; justify-content: space-between; padding: 16px 18px 0;">
+              <span class="smallcaps">Device</span>
+              <Icon name="cpu" size={14} style={{ color: 'var(--text-3)' }}/>
+            </div>
+            <div style="padding: 14px 18px 18px;">
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px 18px;">
+                <DevField k="Name"     v={version.hostname || '—'}/>
+                <DevField k="IP"       v={version.ip || 'AP only'}/>
+                <DevField k="mDNS"     v={version.hostname ? `${version.hostname}.local` : '—'}/>
+                <DevField k="RSSI"     v={`${live.rssi||0} dBm`}/>
+                <DevField k="Free heap" v={`${((live.heap||0)/1024).toFixed(1)} kB`}/>
+                <DevField k="Uptime"   v={fmtUptime(live.uptime||0)}/>
+                <DevField k="Firmware" v={version.version || '—'}/>
+                <DevField k="Board"    v={version.board || '—'}/>
+              </div>
+            </div>
+          </div>
+
+          {/* Mesh card */}
+          <div class="card">
+            <div style="display: flex; align-items: center; justify-content: space-between; padding: 16px 18px 0;">
+              <span class="smallcaps">Mesh</span>
+              <span class="chip" style="text-transform: capitalize;">{live.peers > 0 ? 'peer' : 'standalone'}</span>
+            </div>
+            <div style="padding: 14px 18px 18px;">
+              <div style="font-size: 12px; color: var(--text-2); margin-bottom: 10px;">
+                {live.peers || 0} peer{(live.peers||0) === 1 ? '' : 's'} · {live.healthy||0} healthy
+              </div>
+              {(live.peers || 0) === 0 && (
+                <div style="font-size: 12px; color: var(--text-3); padding: 12px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px;">
+                  No peers discovered. Open Mesh tab to start a 30 s pairing window.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
   );
 }
 
-function fmtUptime(s: number) {
-  if (!s) return '—';
-  const d = Math.floor(s / 86400);
-  const h = Math.floor((s % 86400) / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m ${s%60}s`;
+function StatTile({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: boolean }) {
+  return (
+    <div class="card" style="padding: 16px;">
+      <div class="smallcaps">{label}</div>
+      <div class="mono" style={`font-size: 22px; font-weight: 500; margin-top: 6px; letter-spacing: -0.02em; color: ${accent ? 'var(--acc-orange)' : 'var(--text-0)'};`}>
+        {value}
+      </div>
+      {sub && <div style="font-size: 11px; color: var(--text-3); margin-top: 2px;">{sub}</div>}
+    </div>
+  );
+}
+
+function DevField({ k, v }: { k: string; v: string }) {
+  return (
+    <div>
+      <div style="font-size: 11px; color: var(--text-3);">{k}</div>
+      <div class="mono" style="font-size: 13px; color: var(--text-0); word-break: break-all;">{v}</div>
+    </div>
+  );
 }
 
 /* ----------------------------------------------------------------- */

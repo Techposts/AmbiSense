@@ -194,6 +194,24 @@ input, select, textarea { font: inherit; color: inherit; }
 .bar { height: 6px; background: var(--bg-3); border-radius: 3px; overflow: hidden; margin-top: 10px; }
 .bar-fill { height: 100%; background: var(--acc-grad); transition: width .18s ease; }
 
+/* Live dashboard — design-faithful */
+.dist-big {
+  font-size: 64px; font-weight: 500; letter-spacing: -0.04em;
+  background: var(--acc-grad); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text; line-height: 1;
+}
+.distance-row {
+  display: flex; justify-content: space-between; align-items: start; gap: 24px;
+}
+.dist-spark { flex: 1; align-self: end; max-width: 420px; }
+@media (max-width: 900px) {
+  .dash-grid { grid-template-columns: 1fr !important; }
+  .stat-row { grid-template-columns: repeat(2, 1fr) !important; }
+  .distance-row { flex-direction: column; align-items: stretch; }
+  .dist-spark { max-width: 100%; }
+  .dist-big { font-size: 48px; }
+}
+
 .tab-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
 .mode-card {
   border: 1px solid var(--line); border-radius: 10px; padding: 10px;

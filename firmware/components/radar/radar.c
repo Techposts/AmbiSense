@@ -38,7 +38,30 @@ static struct {
     QueueHandle_t q;
     radar_config_t cfg;
     bool inited;
+    /* Diagnostics — let users debug "distance always 0" by seeing whether
+     * UART bytes are arriving and frames are parsing. */
+    uint32_t      diag_bytes;
+    uint32_t      diag_frames;
+    uint64_t      diag_last_frame_us;
+    uint8_t       diag_last[64];
+    size_t        diag_last_len;
 } s_radar;
+
+void radar_get_diag(radar_diag_t *out) {
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    if (s_radar.drv) snprintf(out->driver_id, sizeof(out->driver_id), "%s", s_radar.drv->id);
+    out->total_bytes_rx = s_radar.diag_bytes;
+    out->total_frames_parsed = s_radar.diag_frames;
+    if (s_radar.diag_last_frame_us == 0) {
+        out->last_frame_age_ms = 0xFFFFFFFFu;
+    } else {
+        uint64_t now = (uint64_t)esp_timer_get_time();
+        out->last_frame_age_ms = (uint32_t)((now - s_radar.diag_last_frame_us) / 1000ULL);
+    }
+    out->last_bytes_len = s_radar.diag_last_len;
+    memcpy(out->last_bytes, s_radar.diag_last, s_radar.diag_last_len);
+}
 
 static const radar_driver_t *find_driver(const char *id) {
     for (size_t i = 0; i < sizeof(k_drivers)/sizeof(k_drivers[0]); ++i) {
@@ -59,12 +82,34 @@ static void radar_task(void *arg) {
         }
         int n = uart_read_bytes(s_radar.cfg.uart_num, rx + held,
                                 sizeof(rx) - held, pdMS_TO_TICKS(50));
-        if (n > 0) held += n;
+        if (n > 0) {
+            held += n;
+            s_radar.diag_bytes += (uint32_t)n;
+            /* Keep a rolling window of the last 64 bytes for the hex dump. */
+            size_t copy = (size_t)n > sizeof(s_radar.diag_last) ? sizeof(s_radar.diag_last) : (size_t)n;
+            if (copy < sizeof(s_radar.diag_last) && s_radar.diag_last_len > 0) {
+                size_t shift = sizeof(s_radar.diag_last) - copy;
+                size_t keep = s_radar.diag_last_len < shift ? s_radar.diag_last_len : shift;
+                memmove(s_radar.diag_last, s_radar.diag_last + (s_radar.diag_last_len - keep), keep);
+                s_radar.diag_last_len = keep;
+            }
+            if (s_radar.diag_last_len + copy > sizeof(s_radar.diag_last)) {
+                s_radar.diag_last_len = sizeof(s_radar.diag_last) - copy;
+            }
+            memcpy(s_radar.diag_last + s_radar.diag_last_len, rx + held - copy, copy);
+            s_radar.diag_last_len += copy;
+            if (s_radar.diag_last_len > sizeof(s_radar.diag_last))
+                s_radar.diag_last_len = sizeof(s_radar.diag_last);
+        }
 
         radar_frame_t frame = {0};
         size_t consumed = s_radar.drv->parse(rx, held, &frame);
         if (consumed > 0) {
             xQueueOverwrite(s_radar.q, &frame);
+            if (frame.ts_us != 0) {
+                s_radar.diag_frames++;
+                s_radar.diag_last_frame_us = frame.ts_us;
+            }
             if (consumed < held) memmove(rx, rx + consumed, held - consumed);
             held -= consumed;
         }

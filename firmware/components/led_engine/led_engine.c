@@ -273,6 +273,18 @@ static void mode_motion_particles(int start) {
 static void render_task(void *arg) {
     (void)arg;
     while (1) {
+        /* Honor the global "system enabled" flag — when off, paint black
+         * and refresh once per frame rather than skipping (so a disabled
+         * strip stays dark even if FreeRTOS switches in mid-frame). */
+        uint8_t sys_en = 1;
+        settings_get_u8("sys", "enabled", &sys_en);
+        if (!sys_en) {
+            for (int i = 0; i < s_led.count; ++i) set_pixel(i, (rgb_t){0,0,0});
+            led_strip_refresh(s_led.strip);
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
         target_t t = {0};
         motion_get(&t);
         int start = distance_to_start_led(t.distance_cm);

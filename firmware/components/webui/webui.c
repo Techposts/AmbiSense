@@ -266,6 +266,25 @@ static esp_err_t handle_ping(httpd_req_t *req) {
     return httpd_resp_send(req, "pong", 4);
 }
 
+/* /api/system — global enable/disable. When disabled, LED engine renders
+ * black, mesh keeps running but no light comes out. NVS sys.enabled. */
+static esp_err_t handle_system_get(httpd_req_t *req) {
+    uint8_t en = 1;
+    settings_get_u8("sys", "enabled", &en);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "enabled", en != 0);
+    return send_json(req, r);
+}
+static esp_err_t handle_system_post(httpd_req_t *req) {
+    if (!gate_auth(req)) return ESP_OK;
+    cJSON *j = read_body_json(req);
+    if (!j) return send_err(req, 400, "bad json");
+    cJSON *e = cJSON_GetObjectItem(j, "enabled");
+    if (e) settings_set_u8("sys", "enabled", cJSON_IsTrue(e) ? 1 : 0);
+    cJSON_Delete(j);
+    return handle_system_get(req);
+}
+
 /* /api/reboot — schedule restart so the response can flush first. */
 static void _reboot_task(void *arg) { (void)arg; vTaskDelay(pdMS_TO_TICKS(500)); esp_restart(); }
 static esp_err_t handle_reboot(httpd_req_t *req) {
@@ -737,6 +756,41 @@ static esp_err_t handle_settings_post(httpd_req_t *req) {
 }
 
 /* ============================================================
+ *  /api/radar/diag — counts of bytes received + frames parsed +
+ *  hex-dump of the last 64 bytes; lets the user immediately tell
+ *  whether "distance is always 0" is a wiring/protocol issue.
+ * ============================================================ */
+static esp_err_t handle_radar_diag(httpd_req_t *req) {
+    radar_diag_t d;
+    radar_get_diag(&d);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddStringToObject(r, "driver", d.driver_id);
+    cJSON_AddNumberToObject(r, "total_bytes_rx", d.total_bytes_rx);
+    cJSON_AddNumberToObject(r, "total_frames_parsed", d.total_frames_parsed);
+    if (d.last_frame_age_ms == 0xFFFFFFFFu) {
+        cJSON_AddNullToObject(r, "last_frame_age_ms");
+    } else {
+        cJSON_AddNumberToObject(r, "last_frame_age_ms", d.last_frame_age_ms);
+    }
+    char hex[3 * 64 + 1];
+    size_t off = 0;
+    for (size_t i = 0; i < d.last_bytes_len && off + 3 < sizeof(hex); ++i) {
+        off += snprintf(hex + off, sizeof(hex) - off, "%02x ", d.last_bytes[i]);
+    }
+    if (off > 0) hex[off - 1] = 0; else hex[0] = 0;
+    cJSON_AddStringToObject(r, "last_bytes_hex", hex);
+    cJSON_AddNumberToObject(r, "last_bytes_len", d.last_bytes_len);
+    /* Helper hint for the user. */
+    const char *hint;
+    if (d.total_bytes_rx == 0)        hint = "No UART bytes from radar — check wiring (TX/RX swap), 5V power, common GND.";
+    else if (d.total_frames_parsed == 0) hint = "Bytes arriving but no frames parsed — likely wrong driver picked. Verify radar_kind matches your sensor.";
+    else if (d.last_frame_age_ms > 2000) hint = "Frames stalled — check power, possibly disconnect.";
+    else                                  hint = "OK — radar streaming valid frames.";
+    cJSON_AddStringToObject(r, "hint", hint);
+    return send_json(req, r);
+}
+
+/* ============================================================
  *  /api/mesh — peers, fusion, pairing
  * ============================================================ */
 static esp_err_t handle_mesh_get(httpd_req_t *req) {
@@ -974,6 +1028,8 @@ static const httpd_uri_t k_routes[] = {
     /* API */
     { "/api/ping",                       HTTP_GET,  handle_ping,             NULL },
     { "/api/reboot",                     HTTP_POST, handle_reboot,           NULL },
+    { "/api/system",                     HTTP_GET,  handle_system_get,       NULL },
+    { "/api/system",                     HTTP_POST, handle_system_post,      NULL },
     { "/api/version",                    HTTP_GET,  handle_version,          NULL },
     { "/api/wifi/scan",                  HTTP_GET,  handle_wifi_scan,        NULL },
     { "/api/wifi",                       HTTP_GET,  handle_wifi_get,         NULL },
@@ -984,6 +1040,7 @@ static const httpd_uri_t k_routes[] = {
     { "/api/board/profiles",             HTTP_GET,  handle_board_profiles,   NULL },
     { "/api/board",                      HTTP_POST, handle_board_post,       NULL },
     { "/api/radar/kinds",                HTTP_GET,  handle_radar_kinds,      NULL },
+    { "/api/radar/diag",                 HTTP_GET,  handle_radar_diag,       NULL },
     { "/api/settings",                   HTTP_GET,  handle_settings_get,     NULL },
     { "/api/settings",                   HTTP_POST, handle_settings_post,    NULL },
     { "/api/distance",                   HTTP_GET,  handle_distance,         NULL },
