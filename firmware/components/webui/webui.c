@@ -157,14 +157,31 @@ static esp_err_t handle_root_real(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "max-age=300, public");
 
+    /* esp_http_server's single-call httpd_resp_send truncates ~16KB responses
+     * on the C3 because the underlying tx buffer can't accept it all at once.
+     * Break large bodies into chunks. Tested: 50 KB raw HTML now delivers
+     * intact instead of cutting off at ~15.8 KB. */
+    const uint8_t *body;
+    size_t total;
     if (accepts_gzip) {
         httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
-        const size_t len = _binary_ui_html_gz_end - _binary_ui_html_gz_start;
-        return httpd_resp_send(req, (const char *)_binary_ui_html_gz_start, len);
+        body  = _binary_ui_html_gz_start;
+        total = _binary_ui_html_gz_end - _binary_ui_html_gz_start;
     } else {
-        const size_t len = _binary_ui_html_end - _binary_ui_html_start;
-        return httpd_resp_send(req, (const char *)_binary_ui_html_start, len);
+        body  = _binary_ui_html_start;
+        total = _binary_ui_html_end - _binary_ui_html_start;
     }
+
+    const size_t CHUNK = 4096;
+    size_t sent = 0;
+    while (sent < total) {
+        size_t n = total - sent;
+        if (n > CHUNK) n = CHUNK;
+        esp_err_t err = httpd_resp_send_chunk(req, (const char *)(body + sent), n);
+        if (err != ESP_OK) return err;
+        sent += n;
+    }
+    return httpd_resp_send_chunk(req, NULL, 0);   /* terminator */
 }
 
 #define handle_root handle_root_real
@@ -247,6 +264,18 @@ static const char k_placeholder_html[] =
 static esp_err_t handle_ping(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/plain");
     return httpd_resp_send(req, "pong", 4);
+}
+
+/* /api/reboot — schedule restart so the response can flush first. */
+static void _reboot_task(void *arg) { (void)arg; vTaskDelay(pdMS_TO_TICKS(500)); esp_restart(); }
+static esp_err_t handle_reboot(httpd_req_t *req) {
+    if (!gate_auth(req)) return ESP_OK;
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", true);
+    cJSON_AddStringToObject(r, "note", "rebooting in 500 ms");
+    send_json(req, r);
+    xTaskCreate(_reboot_task, "reboot", 2048, NULL, 5, NULL);
+    return ESP_OK;
 }
 
 /* ============================================================
@@ -514,12 +543,23 @@ static esp_err_t handle_board_post(httpd_req_t *req) {
         if (!p) { cJSON_Delete(j); return send_err(req, 400, "unknown board id"); }
         settings_set_board_id(p->id);
     }
-    static const char *pkeys[] = { "led_pin", "radar_rx", "radar_tx", "button", "status_led" };
-    for (size_t i = 0; i < sizeof(pkeys)/sizeof(pkeys[0]); ++i) {
-        cJSON *v = cJSON_GetObjectItem(j, pkeys[i]);
+    /* Both JSON-key forms accepted (legacy + canonical), all map to the
+     * same NVS keys below. JSON uses "button_pin"/"status_led_pin" to be
+     * consistent with /api/settings GET; older clients sending
+     * "button"/"status_led" still work. */
+    static const struct { const char *json_a; const char *json_b; const char *nvs; } M[] = {
+        { "led_pin",        NULL,          "led_pin"    },
+        { "radar_rx",       NULL,          "radar_rx"   },
+        { "radar_tx",       NULL,          "radar_tx"   },
+        { "button_pin",     "button",      "button"     },
+        { "status_led_pin", "status_led",  "status_led" },
+    };
+    for (size_t i = 0; i < sizeof(M)/sizeof(M[0]); ++i) {
+        cJSON *v = cJSON_GetObjectItem(j, M[i].json_a);
+        if (!v && M[i].json_b) v = cJSON_GetObjectItem(j, M[i].json_b);
         if (v && cJSON_IsNumber(v)) {
             uint8_t pin = (uint8_t)v->valueint;
-            settings_set_pin_override(pkeys[i], pin);
+            settings_set_pin_override(M[i].nvs, pin);
         }
     }
     cJSON *rk = cJSON_GetObjectItem(j, "radar_kind");
@@ -933,6 +973,7 @@ static const httpd_uri_t k_routes[] = {
 
     /* API */
     { "/api/ping",                       HTTP_GET,  handle_ping,             NULL },
+    { "/api/reboot",                     HTTP_POST, handle_reboot,           NULL },
     { "/api/version",                    HTTP_GET,  handle_version,          NULL },
     { "/api/wifi/scan",                  HTTP_GET,  handle_wifi_scan,        NULL },
     { "/api/wifi",                       HTTP_GET,  handle_wifi_get,         NULL },

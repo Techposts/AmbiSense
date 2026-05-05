@@ -286,55 +286,121 @@ export function ScreenMesh({ live }: AppState) {
 /* ----------------------------------------------------------------- */
 /*                            E. Hardware                            */
 /* ----------------------------------------------------------------- */
-export function ScreenHardware({ setToast }: AppState) {
+export function ScreenHardware({ setToast, settings, reload }: AppState) {
   const [profiles, setProfiles] = useState<any>(null);
   const [kinds, setKinds] = useState<any>(null);
   const [activeBoard, setActiveBoard] = useState('');
   const [activeRadar, setActiveRadar] = useState('');
-  const [overrides, setOverrides] = useState<any>({});
+  /* Pin state initializes from saved settings (so the dropdowns show
+   * what's actually persisted, not just the profile defaults). */
+  const [pins, setPins] = useState<any>({});
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    getJSON('/api/board/profiles').then(r => { setProfiles(r); setActiveBoard(r.active); });
-    getJSON('/api/radar/kinds').then(r => { setKinds(r); setActiveRadar(r.active); });
+    Promise.all([
+      getJSON('/api/board/profiles'),
+      getJSON('/api/radar/kinds'),
+      getJSON('/api/settings'),
+    ]).then(([p, k, s]) => {
+      setProfiles(p);
+      setKinds(k);
+      setActiveBoard(p.active);
+      setActiveRadar(k.active);
+      /* Initialize pin state from saved values, falling back to the
+       * profile defaults for any pins the user hasn't customised yet. */
+      const profile = p.profiles.find((x: any) => x.id === p.active) || p.profiles[0];
+      setPins({
+        led_pin:        s.led_pin        ?? profile.led_pin,
+        radar_rx:       s.radar_rx       ?? profile.radar_rx,
+        radar_tx:       s.radar_tx       ?? profile.radar_tx,
+        button_pin:     s.button_pin     ?? profile.button,
+        status_led_pin: s.status_led_pin ?? profile.status_led,
+      });
+    }).catch((e) => setToast(e.message || 'Load failed', 'err'));
   }, []);
 
-  if (!profiles || !kinds) return <Section title="Hardware"><Card>Loading…</Card></Section>;
+  if (!profiles || !kinds) return <Section title="Hardware"><Card title="Loading">Fetching board profiles…</Card></Section>;
   const profile = profiles.profiles.find((p: any) => p.id === activeBoard) || profiles.profiles[0];
   const unsafe: number[] = profile.unsafe || [];
 
-  const PIN_FIELDS: [string, string][] = [
-    ['led_pin', 'LED data'],
-    ['radar_rx', 'Radar RX'],
-    ['radar_tx', 'Radar TX'],
-    ['button', 'Button'],
-    ['status_led', 'Status LED'],
-  ];
-
-  const save = async () => {
-    try {
-      await postJSON('/api/board', { id: activeBoard, radar_kind: activeRadar, ...overrides });
-      setToast('Saved. Reboot to apply pin changes.');
-    } catch (e: any) { setToast(e.message || 'Save failed', 'err'); }
+  /* When the user changes the board profile, snap pins to the new defaults
+   * so the dropdowns aren't pointing at GPIOs that don't exist on the new
+   * MCU (e.g. ESP32-C3 has GPIO ≤21; ESP32-S3 has 0..48). */
+  const onBoardChange = (id: string) => {
+    setActiveBoard(id);
+    const np = profiles.profiles.find((p: any) => p.id === id);
+    if (np) setPins({
+      led_pin:        np.led_pin,
+      radar_rx:       np.radar_rx,
+      radar_tx:       np.radar_tx,
+      button_pin:     np.button,
+      status_led_pin: np.status_led,
+    });
   };
 
+  const PIN_FIELDS: [keyof typeof pins, string, string][] = [
+    ['led_pin',        'LED data pin',       'led_pin'],
+    ['radar_rx',       'Radar RX (MCU side)', 'radar_rx'],
+    ['radar_tx',       'Radar TX (MCU side)', 'radar_tx'],
+    ['button_pin',     'Button',              'button'],
+    ['status_led_pin', 'Status LED',          'status_led'],
+  ];
+
+  const buildPayload = () => ({
+    id: activeBoard,
+    radar_kind: activeRadar,
+    led_pin:        pins.led_pin,
+    radar_rx:       pins.radar_rx,
+    radar_tx:       pins.radar_tx,
+    button_pin:     pins.button_pin,
+    status_led_pin: pins.status_led_pin,
+  });
+
+  const saveOnly = async () => {
+    setBusy(true);
+    try {
+      await postJSON('/api/board', buildPayload());
+      setToast('Saved. Reboot to apply pin/radar changes.');
+      reload();
+    } catch (e: any) { setToast(e.message || 'Save failed', 'err'); }
+    finally { setBusy(false); }
+  };
+
+  const saveAndReboot = async () => {
+    if (!confirm('Save and reboot device now? You will lose connection for ~10 seconds.')) return;
+    setBusy(true);
+    try {
+      await postJSON('/api/board', buildPayload());
+      await postJSON('/api/reboot', {});
+      setToast('Rebooting — refresh the page in 10 seconds.');
+    } catch (e: any) { setToast(e.message || 'Save failed', 'err'); }
+    finally { setBusy(false); }
+  };
+
+  /* Show whether the current pin differs from the profile default — small
+   * "(default)" / "(custom)" hint helps the user reason about state. */
+  const pinHint = (cur: number, def: number) =>
+    cur === def ? ' (default)' : ' (custom)';
+
   return (
-    <Section title="Hardware" sub="Board profile, radar kind, and per-pin overrides.">
+    <Section title="Hardware" sub="Board profile, radar driver, and pin assignments. Changes take effect on reboot.">
       <div class="grid-cards">
         <Card title="Board profile">
           <Field label="Board">
-            <select class="select" value={activeBoard} onChange={(e) => setActiveBoard((e.target as HTMLSelectElement).value)}>
+            <select class="select" value={activeBoard} onChange={(e) => onBoardChange((e.target as HTMLSelectElement).value)}>
               {profiles.profiles.map((p: any) => (
                 <option value={p.id}>{p.display}{p.validated ? '' : ' — untested'}</option>
               ))}
             </select>
           </Field>
-          <Row k="MCU" v={profile.mcu} />
-          <Row k="max GPIO" v={profile.max_gpio} />
-          <Row k="status" v={profile.validated ? <span style="color: var(--ok)">validated</span> : <span style="color: var(--warn)">untested</span>} />
+          <Row k="MCU"          v={<span class="mono">{profile.mcu}</span>} />
+          <Row k="max GPIO"     v={profile.max_gpio} />
+          <Row k="status"       v={profile.validated ? <span style="color: var(--ok)">validated</span> : <span style="color: var(--warn)">untested</span>} />
+          <Row k="active radar" v={<span class="mono">{activeRadar}</span>} />
         </Card>
 
-        <Card title="Radar sensor">
-          <Field label="Driver">
+        <Card title="Radar driver">
+          <Field label="Sensor">
             <select class="select" value={activeRadar} onChange={(e) => setActiveRadar((e.target as HTMLSelectElement).value)}>
               {kinds.kinds.map((k: any) => <option value={k.id}>{k.display}</option>)}
             </select>
@@ -344,31 +410,42 @@ export function ScreenHardware({ setToast }: AppState) {
               {kinds.kinds.find((k: any) => k.id === activeRadar).note}
             </div>
           )}
-          <div style="margin-top: 10px; padding: 10px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px; font-size: 11px; color: var(--text-3);">
-            Radar driver swap takes effect after reboot. No reflash needed — all drivers ship in the firmware.
+          <div style="margin-top: 14px; padding: 10px 12px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px; font-size: 11px; color: var(--text-3);">
+            All five drivers ship in the firmware. Switching does NOT require a reflash — just save and reboot. The active driver is exclusive (one radar per board).
           </div>
         </Card>
 
-        <Card title="Pin overrides">
-          {PIN_FIELDS.map(([key, label]) => {
-            const def = profile[key];
-            const cur = overrides[key] ?? def;
+        <Card title="Pin assignments">
+          {PIN_FIELDS.map(([key, label, profKey]) => {
+            const cur = pins[key] ?? (profile as any)[profKey];
+            const def = (profile as any)[profKey];
             return (
-              <Field label={`${label} (default GPIO ${def})`}>
+              <Field label={`${label}${pinHint(cur, def)} — default GPIO ${def}`}>
                 <select class="select" value={cur} onChange={(e) => {
                   const v = parseInt((e.target as HTMLSelectElement).value);
-                  setOverrides({ ...overrides, [key]: v });
+                  setPins({ ...pins, [key]: v });
                 }}>
                   {Array.from({ length: profile.max_gpio + 1 }, (_, i) => i)
                     .filter(p => !unsafe.includes(p))
-                    .map(p => <option value={p}>GPIO {p}{p === def ? ' (default)' : ''}</option>)}
+                    .map(p => (
+                      <option value={p}>GPIO {p}{p === def ? ' — default' : ''}</option>
+                    ))}
                 </select>
               </Field>
             );
           })}
-          <button class="btn btn-primary" onClick={save}>Save & note reboot</button>
-          <div style="font-size: 11px; color: var(--text-3); margin-top: 8px;">
-            {unsafe.length} unsafe GPIO{unsafe.length > 1 ? 's' : ''} hidden ({unsafe.join(', ')}). These are strapping/USB-JTAG/flash pins.
+
+          <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px;">
+            <button class="btn" onClick={saveOnly} disabled={busy}>
+              {busy ? 'Saving…' : 'Save'}
+            </button>
+            <button class="btn btn-primary" onClick={saveAndReboot} disabled={busy}>
+              {busy ? '…' : 'Save & reboot'}
+            </button>
+          </div>
+
+          <div style="font-size: 11px; color: var(--text-3); margin-top: 10px;">
+            {unsafe.length} unsafe GPIO{unsafe.length > 1 ? 's' : ''} hidden ({unsafe.join(', ')}). These are strapping/USB-JTAG/flash pins on this MCU and will brick boot if used as I/O.
           </div>
         </Card>
       </div>
@@ -498,6 +575,12 @@ export function ScreenSystem({ version, setToast }: AppState) {
     catch (e: any) { setToast(e.message, 'err'); }
   };
 
+  const doReboot = async () => {
+    if (!confirm('Reboot device? You will lose connection for ~10 seconds.')) return;
+    try { await postJSON('/api/reboot', {}); setToast('Rebooting — refresh the page in 10 s.'); }
+    catch (e: any) { setToast(e.message || 'Reboot failed', 'err'); }
+  };
+
   const doOta = async () => {
     const inp = fileInput.get();
     if (!inp || !inp.files || inp.files.length === 0) { setToast('Pick a .bin file', 'err'); return; }
@@ -550,6 +633,7 @@ export function ScreenSystem({ version, setToast }: AppState) {
           <Row k="MAC" v={<span class="mono">{version.mac}</span>} />
           <Row k="free heap" v={`${Math.round((version.free_heap||0)/1024)} KB`} />
           <Row k="min free heap" v={`${Math.round((version.min_free_heap||0)/1024)} KB`} />
+          <button class="btn btn-danger" onClick={doReboot} style="margin-top: 14px;">Reboot device</button>
         </Card>
       </div>
     </Section>
