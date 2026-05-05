@@ -47,10 +47,22 @@ static const board_profile_t *resolve_board_profile(void) {
     if (err == ESP_OK) {
         const board_profile_t *p = board_profile_by_id(saved_id);
         if (p) {
-            ESP_LOGI(TAG, "Board profile from NVS: %s (%s)", p->id, p->display);
-            return p;
+            /* MCU mismatch guard: if NVS has a profile from a different SoC
+             * (e.g., previous "esp32-devkit" saved on a C3 from a stale flash),
+             * the wrong pin map can drive USB-JTAG / flash pins as outputs and
+             * brick boot before Wi-Fi comes up. Fall back to the compile-time
+             * default whenever the saved profile's MCU doesn't match the
+             * IDF_TARGET we were built for. */
+            if (strcmp(p->mcu, CONFIG_IDF_TARGET) != 0) {
+                ESP_LOGW(TAG, "NVS board.id='%s' is for MCU '%s' but we're running on '%s' — falling back",
+                         p->id, p->mcu, CONFIG_IDF_TARGET);
+            } else {
+                ESP_LOGI(TAG, "Board profile from NVS: %s (%s)", p->id, p->display);
+                return p;
+            }
+        } else {
+            ESP_LOGW(TAG, "NVS board.id='%s' is unknown; falling back to default", saved_id);
         }
-        ESP_LOGW(TAG, "NVS board.id='%s' is unknown; falling back to default", saved_id);
     }
     const board_profile_t *def = board_default_profile();
     ESP_LOGI(TAG, "Board profile (default): %s (%s)", def->id, def->display);

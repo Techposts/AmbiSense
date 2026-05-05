@@ -80,7 +80,15 @@ input, select, textarea { font: inherit; color: inherit; }
 .page-head h1 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: -0.02em; }
 .page-head .sub { color: var(--text-2); font-size: 13px; margin-top: 2px; }
 
+/* Responsive helpers used inline by the layout. Without these the desktop
+ * sidebar and mobile bottom-tab nav both render at once on phones, which
+ * is how the UI looked "scrambled" in the v6.0 report. */
+.hide-mobile { /* visible on desktop, hidden via media query below */ }
+.show-mobile { display: none; }
+
 @media (max-width: 760px) {
+  .hide-mobile { display: none !important; }
+  .show-mobile { display: flex !important; }
   .app { grid-template-columns: 1fr; }
   .sidebar {
     position: fixed; bottom: 0; left: 0; right: 0; top: auto; height: auto;
@@ -90,8 +98,34 @@ input, select, textarea { font: inherit; color: inherit; }
   }
   .brand { display: none; }
   .navlink { flex-direction: column; gap: 3px; padding: 6px 8px; font-size: 10px; }
-  .main { padding: 16px 14px 88px; }
+  .main { padding: 14px 12px 88px; max-width: 100%; }
+  .page-head { gap: 8px; margin-bottom: 16px; }
   .page-head h1 { font-size: 19px; }
+  .app-header { padding: 10px 12px; }
+  /* Cards lose their inner indent on phones — saves ~14 px per card * 4 cards. */
+  .card-body { padding: 12px 12px 14px; }
+  .card-head { padding: 12px 12px 0; }
+  /* Tame inline grids that hardcode min 280 px columns — they'd overflow
+   * on a 360 px viewport once card padding is subtracted. */
+  .card .card-body > div[style*="grid-template-columns: repeat(auto-fit"] {
+    grid-template-columns: 1fr !important;
+  }
+  /* LED screen's primary 2-col grid (Mode list | Color/Layout column) —
+   * stacks vertically on phones. */
+  .led-grid { grid-template-columns: 1fr !important; gap: 12px !important; }
+  /* Top-level grid wrappers used by Motion advanced + Hardware pin maps. */
+  div[style*="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr))"],
+  div[style*="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr))"],
+  div[style*="grid-template-columns: repeat(auto-fit, minmax(170px, 1fr))"] {
+    grid-template-columns: 1fr 1fr !important;
+  }
+  div[style*="grid-template-columns: repeat(auto-fit, minmax(155px, 1fr))"] {
+    grid-template-columns: 1fr 1fr !important;
+  }
+}
+@media (max-width: 480px) {
+  /* Single column on the smallest phones. */
+  div[style*="grid-template-columns: repeat(auto-fit"] { grid-template-columns: 1fr !important; }
 }
 
 /* Atoms */
