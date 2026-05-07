@@ -212,6 +212,25 @@ endpoints, and the `mesh` and `topo` NVS namespaces. See
 [`V6-ARCHITECTURE.md`](V6-ARCHITECTURE.md) for the full justification
 and what was kept.
 
+### Released alphas
+
+| Tag | Highlights |
+|---|---|
+| `v6.1.0-alpha.1`–`alpha.3` | Wi-Fi UX overhaul (modal flow, AP grace period, copy fallback), mobile-friendly UI, AP-teardown bug hotfix. |
+| `v6.2.0-alpha.1` | Phase 2.A — restored LD2410(C) drivers as opt-in; new `presence` component reading `radar_peek()` at 10 Hz; Presence tab in UI; `/api/presence` endpoint. |
+| `v6.2.0-alpha.2` | Phase 2.B — smartghar wire contract: `/api/v1/info`, `/api/v1/devices`, `/api/v1/devices/{id}` PUT, `/api/v1/hub/identify`, `/api/v1/hub/reboot`. mDNS `_smartghar._tcp` advertisement with TXT records. |
+| `v6.2.0-alpha.3` | Hotfix — mDNS instance name (NULL inheritance), `hub_name` field in `/api/v1/info`. |
+| **`v6.2.0-alpha.4`** | **Schema 1.1** — `info.topology` (`"standalone"`) + `info.stream` block; new `/api/v1/stream` WS push channel (3 s snapshots, separate fd pool from `/api/live`). Pairs with smartghar-homeassistant **v0.7.1** — fixes "shows as two HA devices" bug + brings real-time presence updates. ADR: D-009, D-010. |
+
+### Queued (post-alpha.4, pending user go-ahead)
+
+- **Entity expansion (alpha.5 + integration v0.7.2)** — three high-leverage HA additions:
+  - `Stationary` binary_sensor (separate from occupancy — automate on "stationary 30 min → reading/sleeping")
+  - `Approaching` binary_sensor (Kalman direction = approaching AND occupied — the radar-vs-PIR differentiator: "light only when walking *toward* door")
+  - LED as a `Light` entity (proper HA Light card alongside the Number slider — integrates with HA scenes, Adaptive Lighting)
+  - Cost: ~1 hour. Firmware adds `direction` to `/api/v1/devices` state; integration adds two binary_sensor classes + new `light.py` platform.
+- **Per-target LD2450 telemetry** — explicitly rejected for now. Zone-based detection should be a firmware feature with per-zone binary_sensors, not raw coordinate dumping (9 entities × 1500 ms graph noise).
+
 ### PCB rev (next)
 - **Custom PCB based on ESP32-C3 + LD2450** — discrete AP2112K-3.3 or
   MIC5219 LDO feeding both the C3's 3.3 V rail and the LD2450 (avoids
