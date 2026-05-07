@@ -476,6 +476,9 @@ esp_err_t netmgr_set_credentials(const char *ssid, const char *pass) {
     if (!ssid || !ssid[0]) {
         settings_set_wifi_ssid("");
         settings_set_wifi_pass("");
+        /* CRITICAL: clear in-memory flag too, otherwise ap_should_be_on()
+         * still thinks we're configured and keeps the AP up incorrectly. */
+        s_net.sta_configured = false;
         esp_wifi_disconnect();
         notify_state(NETMGR_STATE_AP_FALLBACK);
         ESP_LOGI(TAG, "Cleared STA creds; AP remains up");
@@ -483,6 +486,13 @@ esp_err_t netmgr_set_credentials(const char *ssid, const char *pass) {
     }
     settings_set_wifi_ssid(ssid);
     settings_set_wifi_pass(pass ? pass : "");
+    /* CRITICAL: mark STA configured BEFORE the connection attempt. The
+     * IP_EVENT_STA_GOT_IP handler reads ap_should_be_on() which depends
+     * on this flag — without setting it here, fresh-NVS onboarding
+     * leaves the AP up forever even after STA succeeds, because
+     * ap_should_be_on() returns true unconditionally when no STA is
+     * configured. (Reproduced 2026-05-07 on a freshly-erased C3.) */
+    s_net.sta_configured = true;
 
     /* AP keeps running throughout. Just retarget STA. */
     esp_wifi_disconnect();
