@@ -901,6 +901,13 @@ static esp_err_t handle_v1_info(httpd_req_t *req) {
     cJSON_AddStringToObject(r, "unique_id", hub_id);  /* alias for older integration code */
     char host[33] = {0}; netmgr_get_hostname(host, sizeof(host));
     cJSON_AddStringToObject(r, "host", host);
+    /* hub_name — what the smartghar HA integration uses as the device
+     * registry "name" (see custom_components/smartghar/sensor.py
+     * SmartGharHubSensor.device_info). Without this, the integration
+     * falls back to "SmartGhar Hub (XXXXXX)" which is ugly. We use
+     * the same hostname-as-friendly-name convention TankSync does
+     * (e.g. "ambisense-f6dc"). */
+    cJSON_AddStringToObject(r, "hub_name", host);
     char ip[24] = {0}; netmgr_get_ip(ip, sizeof(ip));
     cJSON_AddStringToObject(r, "ip", ip);
     cJSON_AddNumberToObject(r, "uptime_s",  (uint32_t)(esp_timer_get_time() / 1000000));

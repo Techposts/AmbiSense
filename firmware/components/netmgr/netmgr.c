@@ -154,7 +154,12 @@ static esp_err_t bring_up_mdns(void) {
     char hub_id[40];
     snprintf(hub_id, sizeof(hub_id), "ambisense_%02x%02x%02x%02x%02x%02x",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    if (mdns_service_add("_smartghar", "_smartghar", "_tcp", 80, NULL, 0) == ESP_OK) {
+    /* First arg = friendly instance name. Pass NULL so the service
+     * inherits `mdns_instance_name_set("AmbiSense")` above; passing
+     * "_smartghar" (matching the service type) leaks the raw service
+     * label into HA's discovery card as "_smartghar [random]" instead
+     * of the device's name — which is the bug we hit on 2026-05-07. */
+    if (mdns_service_add(NULL, "_smartghar", "_tcp", 80, NULL, 0) == ESP_OK) {
         mdns_txt_item_t txt[] = {
             { "hub_id",       hub_id        },
             { "product",      "ambisense"   },
