@@ -30,12 +30,17 @@
 > sensor to fuse with. See [docs/HARDWARE.md](docs/HARDWARE.md) for
 > wiring and the PCB-rev power-rail recommendations.
 >
+> **📦 [v6.1.0-alpha.1 pre-release →](https://github.com/Techposts/AmbiSense/releases/tag/v6.1.0-alpha.1)** — first v6.x cut, prebuilt C3 binaries attached. See the release notes for the detailed "why we dropped mesh / multi-device" rationale.
+>
+> **📚 [Wiki →](https://github.com/Techposts/AmbiSense/wiki)** — user-facing guides: getting started, hardware setup, LD2450 mounting, web UI tour, troubleshooting, FAQ, migration from v6.0.
+>
 > | Branch / tag | Purpose |
 > |---|---|
 > | `main` | v6.0.0 — last dual-device firmware (this branch through v6.0.0; v6.x lands on top) |
 > | `v6-idf-rewrite` | active dev branch — single-sensor PCB rev |
 > | `legacy/v5-arduino` | frozen archive of the v5.x Arduino line — reference only |
-> | tag `v6.0.0` | shipped release with prebuilt C3 binaries on the release page (last dual-device) |
+> | tag `v6.1.0-alpha.1` | first v6.x pre-release (single-sensor) |
+> | tag `v6.0.0` | shipped release with prebuilt C3 binaries (last dual-device) |
 > | tag `v5.1.1` | last Arduino-era release |
 >
 > ⚠️ The "Multi-Sensor Networks" / "Master / Slave" / "Network Topology"
@@ -48,29 +53,34 @@ once after the merge to come up to speed. The Arduino code is preserved on
 `legacy/v5-arduino` and under `legacy/AmbiSense/` if you want to keep
 running v5.
 
-## v6 quickstart (ESP-IDF v5.5.2)
+## v6.x quickstart (ESP-IDF v5.5.2)
 
-**Easiest path** — flash the pre-built C3 binary from the
-[v6.0.0 release page](https://github.com/Techposts/AmbiSense/releases/tag/v6.0.0):
+**Easiest path** — flash the prebuilt C3 binaries from the
+[v6.1.0-alpha.1 pre-release](https://github.com/Techposts/AmbiSense/releases/tag/v6.1.0-alpha.1):
 
 ```sh
 pip install esptool
-python -m esptool --chip esp32c3 -p /dev/ttyUSB0 -b 460800 \
+python -m esptool --chip esp32c3 -p /dev/cu.usbmodem... -b 460800 \
     --before default_reset --after hard_reset write_flash \
     --flash_mode dio --flash_size 4MB --flash_freq 80m \
-    0x0     bootloader-c3-v6.0.0.bin \
-    0x8000  partition-table-c3-v6.0.0.bin \
-    0x10000 ambisense-c3-v6.0.0.bin
+    0x0     bootloader-c3-v6.1.0-alpha.1.bin \
+    0x8000  partition-table-c3-v6.1.0-alpha.1.bin \
+    0xd000  ota-data-initial-c3-v6.1.0-alpha.1.bin \
+    0x10000 ambisense-c3-v6.1.0-alpha.1.bin
 ```
+
+If `esptool` reports `Failed to connect to ESP32-C3: No serial data received`, do the BOOT-mode dance: hold `BOOT`, tap `RST` while still holding, release `BOOT` after ~1 s, retry. Full troubleshooting ladder in the [wiki](https://github.com/Techposts/AmbiSense/wiki/Troubleshooting#flash-fails-with-no-serial-data-received).
 
 **Build from source** — you need ESP-IDF v5.5.2 installed (`~/esp/esp-idf-v5.5.2/`):
 
 ```sh
 git clone https://github.com/Techposts/AmbiSense.git
-cd AmbiSense/firmware
-. ~/esp/esp-idf-v5.5.2/export.sh
+cd AmbiSense
+git checkout v6-idf-rewrite          # v6.x development branch
 
-idf.py set-target esp32c3        # or: esp32, esp32s3, esp32c6
+cd firmware
+. ~/esp/esp-idf-v5.5.2/export.sh
+idf.py set-target esp32c3
 idf.py build flash monitor
 ```
 
@@ -90,13 +100,23 @@ for IDF headers — without it, clangd will report
 `'esp_err.h' file not found` and similar; the code still builds
 correctly via `idf.py`.
 
-## v6 documentation
+## Documentation
+
+**[📚 Wiki](https://github.com/Techposts/AmbiSense/wiki)** is the user-facing documentation. Start here if you're installing AmbiSense:
+- [Getting Started](https://github.com/Techposts/AmbiSense/wiki/Getting-Started) — buy parts, flash, first boot
+- [LD2450 Mounting Guide](https://github.com/Techposts/AmbiSense/wiki/LD2450-Mounting-Guide) — critical for v6.x single-sensor coverage
+- [Web UI Tour](https://github.com/Techposts/AmbiSense/wiki/Web-UI-Tour) — every screen, every control
+- [Migration from v6.0](https://github.com/Techposts/AmbiSense/wiki/Migration-from-v6.0) — for users on the dual-device build
+- [FAQ](https://github.com/Techposts/AmbiSense/wiki/FAQ) — including detailed "Why was the mesh dropped?" reasoning
+- [Troubleshooting](https://github.com/Techposts/AmbiSense/wiki/Troubleshooting) — common issues + fixes
+
+Developer-facing docs in the repo:
 
 | Document | Read when |
 |---|---|
-| [docs/V6-ARCHITECTURE.md](docs/V6-ARCHITECTURE.md) | Picking up the v6 rewrite cold — captures the locked architectural decisions (single-sensor LD2450, NVS schema, board profiles). Read first before proposing any structural change. |
-| [docs/V6-ROADMAP.md](docs/V6-ROADMAP.md) | Planning what to build next — the 5-PR plan with status per PR and the tag/release cadence. |
-| [docs/HARDWARE.md](docs/HARDWARE.md) | Building or debugging hardware — reference wiring for C3 SuperMini, board profiles, sensor pinouts, and a flash-fails-to-connect troubleshooting ladder. |
+| [docs/V6-ARCHITECTURE.md](docs/V6-ARCHITECTURE.md) | Picking up the v6 rewrite cold — locked architectural decisions (single-sensor LD2450, NVS schema, board profiles). Read first before proposing any structural change. |
+| [docs/V6-ROADMAP.md](docs/V6-ROADMAP.md) | What's planned next — PR record + v6.x roadmap (PCB, 2-D zone mapping, signed OTA). |
+| [docs/HARDWARE.md](docs/HARDWARE.md) | Reference wiring, board profiles, sensor pinouts, exhaustive troubleshooting ladder. |
 
 ## Repo layout
 
