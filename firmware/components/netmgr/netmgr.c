@@ -139,7 +139,32 @@ static esp_err_t bring_up_mdns(void) {
     }
     mdns_hostname_set(s_net.hostname);
     mdns_instance_name_set("AmbiSense");
+    /* Legacy product-specific service — kept for tools that already
+     * scan for `_ambisense._http._tcp` (older HA integration variants,
+     * curl scripts, etc.). */
     mdns_service_add("_ambisense", "_http", "_tcp", 80, NULL, 0);
+    /* Cross-product Techposts service. The smartghar HA integration
+     * (https://github.com/Techposts/smartghar-homeassistant) discovers
+     * every Techposts device on a single `_smartghar._tcp` zeroconf
+     * scan and dispatches by the `product` TXT record. The required
+     * `hub_id` TXT key is consumed by the integration's config_flow
+     * to uniquely identify this device across HA reloads. */
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    char hub_id[40];
+    snprintf(hub_id, sizeof(hub_id), "ambisense_%02x%02x%02x%02x%02x%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    if (mdns_service_add("_smartghar", "_smartghar", "_tcp", 80, NULL, 0) == ESP_OK) {
+        mdns_txt_item_t txt[] = {
+            { "hub_id",       hub_id        },
+            { "product",      "ambisense"   },
+            { "manufacturer", "SmartGhar"   },
+            { "schema",       "1.0"         },
+            { "path",         "/api/v1/info" },
+        };
+        mdns_service_txt_set("_smartghar", "_tcp", txt, sizeof(txt) / sizeof(txt[0]));
+        ESP_LOGI(TAG, "mDNS smartghar service: hub_id=%s", hub_id);
+    }
     ESP_LOGI(TAG, "mDNS up: %s.local", s_net.hostname);
     return ESP_OK;
 }

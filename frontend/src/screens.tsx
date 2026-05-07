@@ -612,13 +612,20 @@ export function ScreenPresence({ live, settings, setToast, reload }: AppState) {
         </div>
       </div>
 
-      {/* Home Assistant integration hint */}
+      {/* Home Assistant integration hint — leads with MQTT + smartghar */}
       <div class="card">
-        <div class="card-head"><span class="smallcaps">Home Assistant</span><span class="chip">REST</span></div>
+        <div class="card-head"><span class="smallcaps">Home Assistant</span><span class="chip">MQTT recommended</span></div>
         <div class="card-body" style="font-size: 13px; color: var(--text-2); line-height: 1.6;">
-          MQTT auto-discovery is on the v6.2 roadmap. Today, you can wire HA's <b>RESTful sensor</b> at <code class="mono">/api/presence</code>:
-          <pre style="background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px; padding: 12px; font-size: 11px; overflow-x: auto; margin-top: 10px;">
-{`# configuration.yaml
+          <div style="margin-bottom: 10px;">
+            <b>Recommended:</b> install the <a href="https://github.com/Techposts/smartghar-homeassistant" target="_blank" rel="noopener" style="color: var(--info);">smartghar Home Assistant integration</a> and configure MQTT in <b>System → Home Assistant / MQTT</b>. The integration auto-discovers AmbiSense (and other Techposts devices like TankSync) from your broker — no HA YAML editing.
+          </div>
+          <div style="font-size: 11px; color: var(--text-3); margin-bottom: 12px;">
+            Or enable "HA native auto-discovery" in the same System tab card to make stock HA auto-create entities without the custom integration.
+          </div>
+          <details style="margin-top: 8px;">
+            <summary style="cursor: pointer; font-size: 12px; color: var(--text-2);">Or use a RESTful sensor (no MQTT)</summary>
+            <pre style="background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px; padding: 12px; font-size: 11px; overflow-x: auto; margin-top: 10px;">
+{`# configuration.yaml — pulls /api/presence over HTTP
 binary_sensor:
   - platform: rest
     resource: http://${(settings.hostname || 'ambisense')}.local/api/presence
@@ -634,10 +641,8 @@ sensor:
     value_template: "{{ value_json.nearest_cm }}"
     unit_of_measurement: cm
     scan_interval: 5`}
-          </pre>
-          <div style="font-size: 11px; color: var(--text-3); margin-top: 10px;">
-            <a href="https://github.com/Techposts/AmbiSense/wiki/FAQ" target="_blank" rel="noopener" style="color: var(--info);">More HA integration recipes →</a>
-          </div>
+            </pre>
+          </details>
         </div>
       </div>
     </>
@@ -1249,6 +1254,20 @@ export function ScreenSystem({ version, setToast }: AppState) {
               <DevField k="Board" v={version.board || '—'}/>
               <DevField k="RSSI" v={`${version.rssi||0} dBm`}/>
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* SmartGhar HA integration card — local push, mDNS-discovered,
+          no broker setup required. */}
+      <div class="card" style="margin-bottom: 14px;">
+        <div class="card-head"><span class="smallcaps">Home Assistant</span><span class="chip">auto-discovery</span></div>
+        <div class="card-body" style="font-size: 13px; color: var(--text-2); line-height: 1.55;">
+          AmbiSense advertises itself on your network as a SmartGhar device. Install the <a href="https://github.com/Techposts/smartghar-homeassistant" target="_blank" rel="noopener" style="color: var(--info);">SmartGhar Home Assistant integration</a> and HA auto-discovers this device along with any other Techposts hardware on the network — no broker, no YAML, no per-device setup.
+          <div style="margin-top: 10px; padding: 10px 12px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px; font-size: 11px; color: var(--text-3); line-height: 1.55;">
+            Discovery: mDNS service <code class="mono">_smartghar._tcp</code><br/>
+            Contract: <code class="mono">/api/v1/info</code> · <code class="mono">/api/v1/devices</code> · <code class="mono">/api/v1/stream</code> WS<br/>
+            For a curl-friendly REST integration without the custom component, see the <a href="https://github.com/Techposts/AmbiSense/wiki/Home-Assistant-Integration" target="_blank" rel="noopener" style="color: var(--info);">wiki</a>.
           </div>
         </div>
       </div>

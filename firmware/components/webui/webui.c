@@ -28,6 +28,7 @@
 #include "radar.h"
 #include "motion.h"
 #include "presence.h"
+#include "status_led.h"
 
 static const char *TAG = "webui";
 
@@ -857,6 +858,151 @@ static esp_err_t handle_radar_diag(httpd_req_t *req) {
 }
 
 /* ============================================================
+ *  smartghar contract — /api/v1 endpoints consumed by the
+ *  smartghar Home Assistant integration:
+ *    https://github.com/Techposts/smartghar-homeassistant
+ *
+ *  Schema mirrors the aqualevel/TankSync hub firmware so the integration
+ *  treats AmbiSense as another smartghar hub. The integration:
+ *    1. Discovers via mDNS _smartghar._tcp (advertised by netmgr) and
+ *       reads the hub_id TXT record for stable identity.
+ *    2. Polls /api/v1/info and /api/v1/devices every 30 s for hub
+ *       metadata and sub-device state.
+ *    3. Subscribes to /api/v1/stream WS for ~3 s push snapshots.
+ *    4. PUTs /api/v1/devices/{id} to update config (e.g. vacancy_secs).
+ *    5. POSTs /api/v1/hub/identify to flash the status LED, and
+ *       /api/v1/hub/reboot to soft-reboot.
+ *
+ *  AmbiSense models itself as a hub with one virtual device of
+ *  kind "presence" — same coordinator logic the integration uses for
+ *  TankSync's "tank" devices. Adding DEVICE_KIND_PRESENCE = "presence"
+ *  to the integration's const.py is the only change needed there to
+ *  render full presence entities; without that PR, the integration
+ *  shows AmbiSense as a generic hub with diagnostic sensors.
+ * ============================================================ */
+
+/* Build the unique_id used in mDNS TXT and /api/v1/info. */
+static void make_hub_id(char *out, size_t max) {
+    uint8_t mac[6]; esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(out, max, "ambisense_%02x%02x%02x%02x%02x%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+static esp_err_t handle_v1_info(httpd_req_t *req) {
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddStringToObject(r, "schema_version", "1.0");
+    cJSON_AddStringToObject(r, "manufacturer",   "SmartGhar");
+    cJSON_AddStringToObject(r, "product",        "ambisense");
+    cJSON_AddStringToObject(r, "model",          "AmbiSense v6");
+    const esp_app_desc_t *app = esp_app_get_description();
+    cJSON_AddStringToObject(r, "fw_version", app ? app->version : "unknown");
+    char hub_id[40]; make_hub_id(hub_id, sizeof(hub_id));
+    cJSON_AddStringToObject(r, "hub_id",    hub_id);
+    cJSON_AddStringToObject(r, "unique_id", hub_id);  /* alias for older integration code */
+    char host[33] = {0}; netmgr_get_hostname(host, sizeof(host));
+    cJSON_AddStringToObject(r, "host", host);
+    char ip[24] = {0}; netmgr_get_ip(ip, sizeof(ip));
+    cJSON_AddStringToObject(r, "ip", ip);
+    cJSON_AddNumberToObject(r, "uptime_s",  (uint32_t)(esp_timer_get_time() / 1000000));
+    cJSON_AddNumberToObject(r, "wifi_rssi", netmgr_get_rssi());
+    cJSON_AddNumberToObject(r, "free_heap", (uint32_t)esp_get_free_heap_size());
+    cJSON *caps = cJSON_AddArrayToObject(r, "capabilities");
+    cJSON_AddItemToArray(caps, cJSON_CreateString("presence"));
+    cJSON_AddItemToArray(caps, cJSON_CreateString("distance"));
+    cJSON_AddItemToArray(caps, cJSON_CreateString("led_strip"));
+    return send_json(req, r);
+}
+
+/* Build a single "device" object — the AmbiSense radar + presence as
+ * a virtual sub-device of this hub. Kind = "presence" so the
+ * integration can dispatch on it. */
+static cJSON *build_presence_device(void) {
+    cJSON *d = cJSON_CreateObject();
+    cJSON_AddStringToObject(d, "kind", "presence");
+    cJSON_AddNumberToObject(d, "id",   0);
+    cJSON_AddStringToObject(d, "name", "Presence Sensor");
+
+    cJSON *st = cJSON_AddObjectToObject(d, "state");
+    presence_t pr; bool have = (presence_get(&pr) == ESP_OK);
+    cJSON_AddBoolToObject (st, "occupied",     have ? pr.occupied : false);
+    cJSON_AddNumberToObject(st, "target_count", have ? pr.target_count : 0);
+    cJSON_AddBoolToObject (st, "stationary",   have ? pr.stationary : false);
+    cJSON_AddNumberToObject(st, "nearest_cm",   have ? pr.nearest_cm : -1);
+    if (have && pr.ms_since_seen != UINT32_MAX) {
+        cJSON_AddNumberToObject(st, "seconds_since_seen", pr.ms_since_seen / 1000);
+    } else {
+        cJSON_AddNullToObject(st, "seconds_since_seen");
+    }
+    cJSON_AddNumberToObject(st, "rssi_dbm",  netmgr_get_rssi());
+    cJSON_AddStringToObject(st, "conn_state", "online");
+
+    cJSON *cfg = cJSON_AddObjectToObject(d, "config");
+    cJSON_AddNumberToObject(cfg, "vacancy_secs", presence_get_vacancy_timeout());
+    char rk[16] = {0}; settings_get_radar_kind(rk, sizeof(rk));
+    cJSON_AddStringToObject(cfg, "radar_kind", rk[0] ? rk : "ld2450");
+    return d;
+}
+
+static esp_err_t handle_v1_devices(httpd_req_t *req) {
+    cJSON *r = cJSON_CreateObject();
+    cJSON *arr = cJSON_AddArrayToObject(r, "devices");
+    cJSON_AddItemToArray(arr, build_presence_device());
+    return send_json(req, r);
+}
+
+/* PUT /api/v1/devices/{id} — config writes. AmbiSense has only
+ * device id 0 (presence). Accepts {config: {vacancy_secs: N, ...}}.
+ * Returns the updated device object so the integration can immediately
+ * reflect the new state without a separate GET. */
+static esp_err_t handle_v1_devices_put(httpd_req_t *req) {
+    if (!gate_auth(req)) return ESP_OK;
+    /* Path is registered under /api/v1/devices/0 — id is fixed at 0
+     * since AmbiSense has only one virtual device. Future products
+     * with multiple sub-devices will dispatch on the path tail. */
+    cJSON *j = read_body_json(req);
+    if (!j) return send_err(req, 400, "bad json");
+    int updated = 0;
+    cJSON *cfg = cJSON_GetObjectItem(j, "config");
+    if (cfg && cJSON_IsObject(cfg)) {
+        cJSON *v = cJSON_GetObjectItem(cfg, "vacancy_secs");
+        if (v && cJSON_IsNumber(v)) {
+            if (presence_set_vacancy_timeout((uint32_t)v->valueint) == ESP_OK) updated++;
+        }
+        v = cJSON_GetObjectItem(cfg, "radar_kind");
+        if (v && cJSON_IsString(v)) {
+            settings_set_radar_kind(v->valuestring); updated++;
+            /* radar_kind requires a reboot to take effect; integration
+             * is expected to call /api/v1/hub/reboot afterward. */
+        }
+    }
+    cJSON_Delete(j);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", true);
+    cJSON_AddNumberToObject(r, "updated", updated);
+    cJSON_AddItemToObject(r, "device", build_presence_device());
+    return send_json(req, r);
+}
+
+static esp_err_t handle_v1_hub_identify(httpd_req_t *req) {
+    if (!gate_auth(req)) return ESP_OK;
+    /* Flash the onboard status LED for ~3 s using a one-shot OTA-pattern
+     * burst — fast 5 Hz blink that's visually distinct from the slow
+     * AP/STA heartbeat. The status_led module's oneshot mechanism
+     * automatically reverts to the prior pattern when done. */
+    status_led_oneshot(STATUS_LED_OTA, 3000);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", true);
+    return send_json(req, r);
+}
+
+static esp_err_t handle_v1_hub_reboot(httpd_req_t *req) {
+    /* Alias to the existing /api/reboot. Kept as a separate route so
+     * the smartghar contract path stays stable across firmware
+     * refactors of the legacy /api/(any) tree. */
+    return handle_reboot(req);
+}
+
+/* ============================================================
  *  /api/distance + /api/live (WebSocket)
  * ============================================================ */
 static esp_err_t handle_distance(httpd_req_t *req) {
@@ -1009,6 +1155,12 @@ static const httpd_uri_t k_routes[] = {
     { "/api/settings",                   HTTP_POST, handle_settings_post,    NULL },
     { "/api/distance",                   HTTP_GET,  handle_distance,         NULL },
     { "/api/presence",                   HTTP_GET,  handle_presence_get,     NULL },
+    /* smartghar contract — /api/v1 — consumed by the smartghar HA integration */
+    { "/api/v1/info",                    HTTP_GET,  handle_v1_info,          NULL },
+    { "/api/v1/devices",                 HTTP_GET,  handle_v1_devices,       NULL },
+    { "/api/v1/devices/0",               HTTP_PUT,  handle_v1_devices_put,   NULL },
+    { "/api/v1/hub/identify",            HTTP_POST, handle_v1_hub_identify,  NULL },
+    { "/api/v1/hub/reboot",              HTTP_POST, handle_v1_hub_reboot,    NULL },
     { "/api/ota",                        HTTP_POST, handle_ota,              NULL },
 };
 
