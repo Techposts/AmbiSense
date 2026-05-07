@@ -1,18 +1,29 @@
-# SmartGhar device protocol (v1.0)
+# SmartGhar device protocol (v1.1)
 
 This document is the **wire contract** every Techposts IoT device implements to be discovered and operated by the [smartghar Home Assistant integration](https://github.com/Techposts/smartghar-homeassistant). It also describes the integration-side dispatch model for adding a new product.
 
 If you're building a new Techposts device (RidgeSync, future products), this is the doc to design against.
 
+### Versions
+
+| Schema | Integration | Firmware | Notable |
+|---|---|---|---|
+| 1.0 | smartghar v0.6.x – v0.7.0 | TankSync hub firmware, AmbiSense ≤ v6.2.0-alpha.3 | Initial release. Hub topology only, polling-only. |
+| **1.1** | **smartghar v0.7.1+** | **AmbiSense ≥ v6.2.0-alpha.4** | Adds `info.topology`, `info.stream`, real-time WS push channel, `event` frame kind. **All additions are backwards-compatible** — older integrations ignore unknown fields and stay on polling. |
+
 ---
 
 ## Topology models
 
-The protocol supports two device topologies. Both speak the same wire contract — the difference is whether `/api/v1/devices` returns one entry or many.
+The protocol supports two device topologies. Both speak the same wire contract — they differ in (a) whether `/api/v1/devices` returns one entry or many, and (b) how the HA integration renders them in the device registry.
+
+Schema 1.1 makes the topology **explicit** via `info.topology` (`"standalone"` or `"hub"`). The integration reads this to decide whether sub-device entities collapse onto the hub's HA device card (standalone) or appear as separate cards linked via `via_device` (hub).
 
 ### A. Standalone hub (mains-powered, always-on)
 
-Single ESP32 doing everything. The device IS its own hub; it presents a single virtual sub-device representing its own function.
+Single ESP32 doing everything. The device IS its own hub. It declares `topology: "standalone"` and presents a single virtual sub-device that maps onto its physical function.
+
+**HA rendering**: the integration's `subdevice_device_info()` helper detects `standalone` and **collapses sub-device entities onto the hub's HA device entry** — no `via_device` link, no second card in Settings → Devices. The user sees one device with all entities under it. This is the right UX when the hub *is* the sensor/actuator.
 
 Examples: **AmbiSense** (radar + LED, mains via USB or 5 V PSU), **mains-powered RidgeSync** (door lock with permanent power).
 
@@ -25,7 +36,9 @@ Examples: **AmbiSense** (radar + LED, mains via USB or 5 V PSU), **mains-powered
 
 ### B. Hub + TX (battery sensors via gateway)
 
-Always-on hub ESP32 acts as a gateway for battery-powered TX nodes that talk to it over short-range RF (ESP-NOW, LoRa, BLE). Each TX node appears as a sub-device in the hub's `/api/v1/devices` array.
+Always-on hub ESP32 acts as a gateway for battery-powered TX nodes that talk to it over short-range RF (ESP-NOW, LoRa, BLE). It declares `topology: "hub"`. Each TX node appears as a sub-device in the hub's `/api/v1/devices` array.
+
+**HA rendering**: each sub-device renders as **its own HA device** with `via_device` pointing at the hub. The user sees one card per physical TX node — appropriate because each is a real hardware device with its own battery, RSSI, name, location.
 
 Examples: **TankSync** (one mains hub, multiple battery-powered tank sensors), **future battery-powered RidgeSync** if shipped as a multi-door kit.
 
@@ -96,16 +109,22 @@ You may **also** advertise a product-specific service (e.g. `_ambisense._http._t
 
 ### `GET /api/v1/info`
 
-Hub identity + diagnostics. Polled every 30 s by the integration.
+Hub identity + diagnostics. Polled every 30 s by the integration as a baseline, even when WS push is connected (catches static-field changes + acts as recovery channel).
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "manufacturer":   "SmartGhar",
   "product":        "ambisense",
   "model":          "AmbiSense v6",
-  "fw_version":     "v6.2.0-alpha.2",
+  "topology":       "standalone",
+  "stream": {
+    "ws_path":         "/api/v1/stream",
+    "frame_period_ms": 3000
+  },
+  "fw_version":     "v6.2.0-alpha.4",
   "hub_id":         "ambisense_d83bda3506f0",
+  "hub_name":       "ambisense-06f0",
   "unique_id":      "ambisense_d83bda3506f0",
   "host":           "ambisense-06f0",
   "ip":             "192.168.1.42",
@@ -116,7 +135,17 @@ Hub identity + diagnostics. Polled every 30 s by the integration.
 }
 ```
 
-Required keys: `schema_version`, `manufacturer`, `product`, `model`, `fw_version`, `hub_id`. Everything else is best-effort but recommended.
+Required keys (schema 1.1): `schema_version`, `manufacturer`, `product`, `model`, `fw_version`, `hub_id`, `hub_name`, `topology`. Recommended: `stream`, `host`, `ip`, `capabilities`. Everything else is best-effort.
+
+Field reference:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `topology` | `"standalone"` \| `"hub"` | yes (1.1+) | Drives HA device-registry rendering. See Topology models above. |
+| `stream.ws_path` | string | recommended | Where to subscribe for real-time push. Almost always `/api/v1/stream`. |
+| `stream.frame_period_ms` | integer | recommended | Self-declared snapshot cadence. Picks the integration's reconnect/timeout heuristics. AmbiSense = 3000, TankSync hub firmware will set 30000 once it adopts 1.1. |
+| `hub_name` | string | yes (1.1+) | What HA shows as the device-registry name. Convention: same as `host` (e.g. `ambisense-06f0`). Without it the integration crashes — no fallback in 1.1. |
+| `capabilities` | string[] | optional | Free-form tags. Future use: integration could conditionally enable entity sets based on capabilities. Not load-bearing today. |
 
 ### `GET /api/v1/devices`
 
@@ -182,31 +211,74 @@ Optional. Reserved for future OTA-via-integration flow. AmbiSense v6.2 returns 5
 
 ## WebSocket — `/api/v1/stream`
 
-Real-time push. Integration opens one WS per discovered device after `/api/v1/info` succeeds.
+Real-time push. Integration opens one WS per hub immediately after `/api/v1/info` returns. The 30 s HTTP polling continues in parallel as a fallback + static-field refresh channel.
 
-### Cadence
-- Snapshot frame every **~3 seconds** containing the latest devices array
-- Heartbeat every **20 seconds** (empty `{}` or `{"hb": true}`) to keep the connection warm
-- Reconnect with exponential backoff (2 s → 60 s) if dropped
+### Connection lifecycle
 
-### Frame shape
+1. Integration opens `ws://<host>/api/v1/stream` (path comes from `info.stream.ws_path`)
+2. Firmware sends a **hello** frame within ~100 ms of accept
+3. Firmware then emits **snapshot** frames every `info.stream.frame_period_ms` (3 s for AmbiSense)
+4. Firmware MAY emit **event** frames at any time between snapshots for state changes that shouldn't wait for the next tick
+5. aiohttp keepalive: integration pings every 20 s; firmware's `httpd_ws_send_frame_async` returns error if the socket is dead → firmware drops the fd; integration reconnects with backoff 2 s → 60 s
+
+### Frame: `hello` (sent once on connect)
 
 ```json
 {
-  "type":    "snapshot",
-  "ts":      1234567890,
-  "info":    { ...same shape as /api/v1/info... },
-  "devices": [ ...same shape as /api/v1/devices... ]
+  "kind":           "hello",
+  "schema_version": "1.1",
+  "hub_id":         "ambisense_d83bda3506f0"
 }
 ```
 
-The integration uses this for live entity updates without burning HTTP bandwidth.
+Schema validation only — integration logs a warning if the hub announces a major version it doesn't speak (1.x vs 2.x). Doesn't drop the connection in 1.x.
 
-### Implementation note
+### Frame: `snapshot` (periodic)
 
-If you don't have time to implement a separate WS endpoint, the integration silently falls back to HTTP polling on `/api/v1/info` + `/api/v1/devices` every 30 s. This is acceptable for telemetry that doesn't need sub-second updates (e.g. tank levels). It's NOT acceptable for occupancy/door events (5 s+ stale state would cause user-visible automation lag).
+```json
+{
+  "kind": "snapshot",
+  "hub":  {
+    "uptime_s":       12345,
+    "wifi_rssi":      -45,
+    "ota_available":  null
+  },
+  "devices": [
+    { "kind": "presence", "id": 0, "name": "Presence Sensor",
+      "state": { "occupied": true, "nearest_cm": 80, ... },
+      "config": { ... } }
+  ]
+}
+```
 
-For new mains-powered products: implement the WS. For battery-powered products that wake briefly to send a packet: skip the WS, lean on the hub's WS for any sub-device the hub knows about.
+`hub` carries only **dynamic** fields (uptime, RSSI, OTA-available flag). Static fields (`hub_id`, `fw_version`, `topology`, `product`, `ota.current`, `ota.channel`) come from polled `/api/v1/info` and are not duplicated on every tick — saves bandwidth on small frames.
+
+`devices` is the same shape as `GET /api/v1/devices` so the integration's snapshot-merge logic is identical between push and poll paths.
+
+### Frame: `event` (on state change)
+
+```json
+{
+  "kind":      "event",
+  "device_id": 0,
+  "state":     { "occupied": true }
+}
+```
+
+Optional, but **strongly recommended** for event-driven kinds (locks, gas, doors). The integration applies the partial `state` delta to the existing device entry and triggers an immediate entity refresh — no waiting for next snapshot. Use cases: lock-opened, gas-leak-detected, door-bell-pressed. AmbiSense doesn't emit `event` frames yet (snapshot at 3 Hz is fine for occupancy), but RidgeSync will.
+
+### Cadence picking guide
+
+| Device behaviour | snapshot `frame_period_ms` | emit `event`? |
+|---|---|---|
+| Steady-state telemetry (tank level) | 30000 | no |
+| Sub-second physical motion (presence) | 3000 | no — snapshot is fast enough |
+| Event-driven (lock, doorbell, gas) | 30000 | **yes** — events are the real-time channel |
+| Mixed steady + bursty (power: live W + cumulative kWh) | 5000 | yes for trip events |
+
+### Skipping WS
+
+If the firmware can't ship WS yet, omit `info.stream` entirely. The integration falls back to 30 s polling — acceptable for tank levels and other slow telemetry, NOT acceptable for occupancy or door events (5 s+ stale state = visible automation lag).
 
 ---
 
@@ -384,16 +456,18 @@ Commands like `unlock`, `add_fingerprint` would arrive via `PUT /api/v1/devices/
 Before claiming smartghar-compat:
 
 - [ ] mDNS service `_smartghar._tcp` advertises with all 5 required TXT records
-- [ ] `GET /api/v1/info` returns 200 with all required keys + plausible values
-- [ ] `GET /api/v1/devices` returns a non-empty array with the right `kind` per sub-device
+- [ ] `GET /api/v1/info` returns 200 with all required keys + plausible values, including `topology` and (if WS is implemented) `stream`
+- [ ] `GET /api/v1/devices` returns the right `kind` per sub-device (or `[]` for standalone hubs that surface state through `info` only)
 - [ ] `PUT /api/v1/devices/{id}` round-trips a config change (verify via subsequent GET)
 - [ ] `POST /api/v1/hub/identify` makes the LED visibly flash
 - [ ] `POST /api/v1/hub/reboot` causes a clean reboot
-- [ ] WS `/api/v1/stream` emits at least one snapshot frame within 5 s of connect, then heartbeats every 20 s
+- [ ] WS `/api/v1/stream` sends `hello` within 100 ms of connect, then `snapshot` at the declared `frame_period_ms`. Test with `websocat ws://<host>/api/v1/stream` from a laptop.
+- [ ] If WS is implemented, the broadcast task **skips JSON build when no clients are connected** (early-out check) — verify via heap-stable idle behaviour
 - [ ] Auth-gated endpoints reject unauthenticated writes with 401
 - [ ] Pulling the power and bringing the device back: integration reconnects + entities go available
 - [ ] Add the kind to `smartghar-homeassistant/custom_components/smartghar/const.py` + entity builders
-- [ ] Bench test: install the updated integration in HA, watch the device auto-discover, confirm entities populate
+- [ ] In integration, choose the right device_info helper: `hub_device_info()` for hub-level entities, `subdevice_device_info()` for kind-specific entities (it auto-collapses based on `topology`)
+- [ ] Bench test: install the updated integration in HA, watch the device auto-discover, confirm entities populate as ONE device (standalone) or one-per-TX (hub)
 
 ---
 
@@ -402,11 +476,19 @@ Before claiming smartghar-compat:
 | What | Where |
 |---|---|
 | mDNS service registration | [`netmgr.c:bring_up_mdns()`](../firmware/components/netmgr/netmgr.c) |
-| `/api/v1/info` handler | [`webui.c:handle_v1_info()`](../firmware/components/webui/webui.c) |
+| `/api/v1/info` handler (with topology + stream) | [`webui.c:handle_v1_info()`](../firmware/components/webui/webui.c) |
 | `/api/v1/devices` handler | [`webui.c:handle_v1_devices()`](../firmware/components/webui/webui.c) |
 | `build_presence_device()` device builder | [`webui.c`](../firmware/components/webui/webui.c) |
 | `/api/v1/devices/0` PUT handler | [`webui.c:handle_v1_devices_put()`](../firmware/components/webui/webui.c) |
 | `/api/v1/hub/identify` | [`webui.c:handle_v1_hub_identify()`](../firmware/components/webui/webui.c) |
 | `/api/v1/hub/reboot` | [`webui.c:handle_v1_hub_reboot()`](../firmware/components/webui/webui.c) |
+| `/api/v1/stream` WS handler + broadcast task | [`webui.c:handle_v1_stream()` + `v1_stream_broadcast_task()`](../firmware/components/webui/webui.c) |
 
-WS `/api/v1/stream` is **not yet implemented** in v6.2.0-alpha.2 — falls back to polling per the spec. Will land in v6.2.0-alpha.3 along with the integration-side `kind: "presence"` PR.
+### Integration-side counterparts (smartghar-homeassistant v0.7.1+)
+
+| What | Where |
+|---|---|
+| Topology-aware DeviceInfo helpers | `custom_components/smartghar/device_info.py` (`hub_device_info`, `subdevice_device_info`) |
+| WS frame dispatch (hello / snapshot / event) | `coordinator.py:_handle_ws_msg`, `_apply_snapshot`, `_apply_event` |
+| Per-product model name dispatch | `const.py:hub_model_for_product()` |
+| zeroconf config_flow + manual IP fallback | `config_flow.py` |

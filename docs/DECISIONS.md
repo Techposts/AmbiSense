@@ -118,6 +118,36 @@ Format borrowed from [ADR](https://adr.github.io) (Architecture Decision Records
 
 ---
 
+## D-009 — Topology declared in contract, rendered by integration
+
+- **Date:** 2026-05-07 (v6.2.0-alpha.4 / smartghar v0.7.1)
+- **Status:** Locked
+- **Context:** v0.7.0 of the smartghar HA integration was modeled around TankSync's hub-with-children topology — sub-device entities always rendered as their own HA device with `via_device` linking back to the hub. Worked for TankSync (each tank IS a separate physical TX node). Wrong for AmbiSense (the C3 IS the radar; splitting them into "AmbiSense Hub" + "Presence Sensor" produced two HA cards for what's physically one box). The integration needed to know the difference *without* hardcoding per-product branches.
+- **Decision:** Add `info.topology` to the wire contract — `"standalone"` or `"hub"`. Integration ships two helpers in [`device_info.py`](../../smartghar-homeassistant/custom_components/smartghar/device_info.py): `hub_device_info()` for hub-level entities, `subdevice_device_info()` for kind-specific entities. The latter checks `topology` and either returns the hub's DeviceInfo verbatim (collapse, standalone) or builds a child DeviceInfo with `via_device` (split, hub).
+- **Alternatives considered:**
+  - **Branch on `info.product` in the integration** (e.g. `if product == "ambisense": collapse else: split`). Rejected — every new product would need integration-side code; doesn't scale.
+  - **Drop the synthetic sub-device from AmbiSense firmware entirely** (move presence state into `info.presence`). Rejected — would have required changing the data shape, the integration's per-kind entity dispatch, and the wire contract simultaneously. Topology-flag approach is purely additive.
+  - **Per-entity-class detection** (every entity reads `info.topology` directly). Rejected — duplicates the check across 12+ entity classes; the helper centralises it.
+- **Why this won:** the firmware *knows* its own topology; declaring it in the contract makes the integration product-agnostic. Adding RidgeSync (mains-powered standalone lock) or PowerSync (multi-clamp hub) requires zero integration-side branching — they just declare their topology and the renderer does the right thing.
+- **See also:** [`SMARTGHAR-PROTOCOL.md` Topology models section](SMARTGHAR-PROTOCOL.md#topology-models); helper source in `smartghar-homeassistant/custom_components/smartghar/device_info.py`.
+
+---
+
+## D-010 — Two WebSocket endpoints: `/api/live` (PWA) + `/api/v1/stream` (smartghar)
+
+- **Date:** 2026-05-07 (v6.2.0-alpha.4)
+- **Status:** Locked
+- **Context:** Existing `/api/live` WS broadcasts at 20 Hz with rich live-data fields (raw distance, heap, RSSI, occupancy, sparkline-friendly). Tightly coupled to the AmbiSense PWA's dashboard rendering — changing its shape breaks the UI. The smartghar HA integration wants a completely different shape (protocol-shaped frames: `{kind, hub:{}, devices:[]}`), a different cadence (3 s), and a stable cross-product schema. One endpoint can't serve both consumers cleanly.
+- **Decision:** Run both. `/api/live` keeps its PWA-shaped 20 Hz frames and its consumer (the dashboard). `/api/v1/stream` emits smartghar protocol frames (`hello` / `snapshot` / `event`) at 3 s for the HA integration. Separate fd pools (`MAX_WS_CLIENTS` + `MAX_V1_WS_CLIENTS` = 4 each), separate broadcast tasks, both with idle early-out so neither does cJSON work when no one's listening.
+- **Alternatives considered:**
+  - **One WS endpoint + version-negotiate the frame shape.** Rejected — coupling release cadences of the PWA and the integration via a shared WS contract; first sub-protocol mismatch ships breakage to both consumers at once.
+  - **Drop `/api/live`, port the PWA to consume `/api/v1/stream`.** Rejected for now — PWA needs sub-second updates; the protocol's 3 s cadence is wrong for it. Could revisit if we ever change the PWA to a polling architecture.
+  - **HTTP SSE for the integration instead of WS.** Rejected — the integration code path already uses aiohttp's `ws_connect`; SSE would be a parallel infrastructure path with no clear benefit.
+- **Why this won:** the two consumers genuinely have different needs (PWA = high-frequency raw, integration = protocol-shaped events). Separating them by URI keeps each evolution independent. The cost is ~4 KB stack + 16 bytes for the second fd table — trivial.
+- **See also:** [`webui.c:handle_v1_stream` + `v1_stream_broadcast_task`](../firmware/components/webui/webui.c); SMARTGHAR-PROTOCOL.md WebSocket section.
+
+---
+
 ## How to add a new entry
 
 When a decision rises to "this affects how the codebase is organised" or "this constrains future product design," document it here:

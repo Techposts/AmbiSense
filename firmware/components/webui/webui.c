@@ -32,11 +32,13 @@
 
 static const char *TAG = "webui";
 
-#define MAX_WS_CLIENTS 4
+#define MAX_WS_CLIENTS    4   /* /api/live consumers (the PWA dashboard) */
+#define MAX_V1_WS_CLIENTS 4   /* /api/v1/stream consumers (HA integration) */
 
 static struct {
     httpd_handle_t srv;
-    int ws_fds[MAX_WS_CLIENTS];
+    int ws_fds[MAX_WS_CLIENTS];        /* /api/live    — 20 Hz live frames */
+    int v1_ws_fds[MAX_V1_WS_CLIENTS];  /* /api/v1/stream — 3 s snapshots  */
     SemaphoreHandle_t lock;
     webui_live_t latest;
 } s_web;
@@ -890,10 +892,28 @@ static void make_hub_id(char *out, size_t max) {
 
 static esp_err_t handle_v1_info(httpd_req_t *req) {
     cJSON *r = cJSON_CreateObject();
-    cJSON_AddStringToObject(r, "schema_version", "1.0");
+    /* schema 1.1 added: topology + stream blocks. The smartghar HA
+     * integration v0.7.1+ reads these to (a) collapse standalone
+     * products into a single HA device and (b) connect to the WS push
+     * channel for real-time updates instead of falling back to 30s
+     * polling. v0.7.0 and older still work — they ignore the new
+     * fields and stay on polling. */
+    cJSON_AddStringToObject(r, "schema_version", "1.1");
     cJSON_AddStringToObject(r, "manufacturer",   "SmartGhar");
     cJSON_AddStringToObject(r, "product",        "ambisense");
     cJSON_AddStringToObject(r, "model",          "AmbiSense v6");
+    /* topology=standalone — the C3 itself is the radar. No sub-devices
+     * in the physical sense; the integration merges presence entities
+     * onto the hub's HA device card. Future products that aggregate
+     * battery TX nodes (TankSync, PowerSync) will set "hub" instead. */
+    cJSON_AddStringToObject(r, "topology",       "standalone");
+    /* stream — tells the integration where to subscribe and what cadence
+     * to expect. frame_period_ms is self-declared so each product
+     * picks its own push rate (3s for AmbiSense; TankSync would emit
+     * snapshots only on TX-frame events). */
+    cJSON *stream = cJSON_AddObjectToObject(r, "stream");
+    cJSON_AddStringToObject(stream, "ws_path",         "/api/v1/stream");
+    cJSON_AddNumberToObject(stream, "frame_period_ms", 3000);
     const esp_app_desc_t *app = esp_app_get_description();
     cJSON_AddStringToObject(r, "fw_version", app ? app->version : "unknown");
     char hub_id[40]; make_hub_id(hub_id, sizeof(hub_id));
@@ -1100,6 +1120,117 @@ void webui_publish_live(const webui_live_t *snap) {
 }
 
 /* ============================================================
+ *  /api/v1/stream — smartghar-protocol WS push channel
+ *
+ *  Consumed by the smartghar Home Assistant integration v0.7.1+.
+ *  Distinct from /api/live (which feeds the PWA dashboard at 20 Hz)
+ *  because the integration wants protocol-shaped JSON frames at a
+ *  slower cadence and the PWA wants raw live deltas.
+ *
+ *  Frames:
+ *    {"kind":"hello","schema_version":"1.1","hub_id":"..."}
+ *      — sent once on connect.
+ *    {"kind":"snapshot","hub":{...dynamic...},"devices":[...]}
+ *      — emitted every 3 s by v1_stream_broadcast_task.
+ *
+ *  Static fields (hub_id, fw_version, product, topology, ota.current)
+ *  are not re-sent on every snapshot; the integration learns them
+ *  once via /api/v1/info polling and merges them with WS deltas.
+ *
+ *  The "event" frame kind is reserved for future event-driven push
+ *  (lock-opened, gas-leak) — not emitted from AmbiSense yet.
+ * ============================================================ */
+static esp_err_t handle_v1_stream(httpd_req_t *req) {
+    if (req->method != HTTP_GET) return ESP_OK;
+    /* Handshake. Save fd, send hello frame. */
+    int fd = httpd_req_to_sockfd(req);
+    xSemaphoreTake(s_web.lock, portMAX_DELAY);
+    bool seated = false;
+    for (int i = 0; i < MAX_V1_WS_CLIENTS; ++i) {
+        if (s_web.v1_ws_fds[i] == 0) {
+            s_web.v1_ws_fds[i] = fd;
+            seated = true;
+            break;
+        }
+    }
+    xSemaphoreGive(s_web.lock);
+    if (!seated) {
+        ESP_LOGW(TAG, "v1/stream: no slot for fd=%d (max %d)", fd, MAX_V1_WS_CLIENTS);
+        return ESP_OK;
+    }
+
+    char hub_id[40]; make_hub_id(hub_id, sizeof(hub_id));
+    char hello[160];
+    int n = snprintf(hello, sizeof(hello),
+        "{\"kind\":\"hello\",\"schema_version\":\"1.1\",\"hub_id\":\"%s\"}",
+        hub_id);
+    httpd_ws_frame_t f = {
+        .final = true, .fragmented = false,
+        .type = HTTPD_WS_TYPE_TEXT,
+        .payload = (uint8_t *)hello, .len = n,
+    };
+    httpd_ws_send_frame_async(s_web.srv, fd, &f);
+    ESP_LOGI(TAG, "v1/stream client connected, fd=%d", fd);
+    return ESP_OK;
+}
+
+/* Emit one snapshot frame to every /api/v1/stream subscriber. */
+static void v1_stream_broadcast_task(void *arg) {
+    (void)arg;
+    char hub_id[40]; make_hub_id(hub_id, sizeof(hub_id));
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(3000));
+
+        /* Skip the JSON build entirely if no one's listening — saves ~3 KB
+         * stack churn + cJSON allocations on idle hubs. */
+        bool any = false;
+        xSemaphoreTake(s_web.lock, portMAX_DELAY);
+        for (int i = 0; i < MAX_V1_WS_CLIENTS; ++i) {
+            if (s_web.v1_ws_fds[i] != 0) { any = true; break; }
+        }
+        xSemaphoreGive(s_web.lock);
+        if (!any) continue;
+
+        /* Build snapshot JSON. Mirrors handle_v1_devices' shape so the
+         * integration's snapshot-merge logic in coordinator.py treats
+         * WS-pushed devices identically to polled devices. */
+        cJSON *root = cJSON_CreateObject();
+        cJSON_AddStringToObject(root, "kind", "snapshot");
+
+        cJSON *hub = cJSON_AddObjectToObject(root, "hub");
+        cJSON_AddNumberToObject(hub, "uptime_s",  (uint32_t)(esp_timer_get_time() / 1000000));
+        cJSON_AddNumberToObject(hub, "wifi_rssi", netmgr_get_rssi());
+
+        cJSON *devs = cJSON_AddArrayToObject(root, "devices");
+        cJSON_AddItemToArray(devs, build_presence_device());
+
+        char *json = cJSON_PrintUnformatted(root);
+        cJSON_Delete(root);
+        if (!json) continue;
+        size_t len = strlen(json);
+
+        httpd_ws_frame_t f = {
+            .final = true, .fragmented = false,
+            .type = HTTPD_WS_TYPE_TEXT,
+            .payload = (uint8_t *)json, .len = len,
+        };
+        xSemaphoreTake(s_web.lock, portMAX_DELAY);
+        for (int i = 0; i < MAX_V1_WS_CLIENTS; ++i) {
+            if (s_web.v1_ws_fds[i] == 0) continue;
+            esp_err_t err = httpd_ws_send_frame_async(
+                s_web.srv, s_web.v1_ws_fds[i], &f);
+            if (err != ESP_OK) {
+                /* Client gone — drop fd. Integration's coordinator
+                 * will reconnect with backoff. */
+                s_web.v1_ws_fds[i] = 0;
+            }
+        }
+        xSemaphoreGive(s_web.lock);
+        free(json);
+    }
+}
+
+/* ============================================================
  *  /api/ota  — POST application/octet-stream firmware upload
  * ============================================================ */
 static esp_err_t handle_ota(httpd_req_t *req) {
@@ -1190,7 +1321,7 @@ esp_err_t webui_init(void) {
         httpd_register_uri_handler(s_web.srv, &k_routes[i]);
     }
 
-    /* Live-data WS */
+    /* Live-data WS — drives the PWA dashboard at 20 Hz. */
     static const httpd_uri_t ws_route = {
         .uri = "/api/live", .method = HTTP_GET,
         .handler = handle_ws, .user_ctx = NULL,
@@ -1198,9 +1329,20 @@ esp_err_t webui_init(void) {
     };
     httpd_register_uri_handler(s_web.srv, &ws_route);
 
-    xTaskCreate(ws_broadcast_task, "ws_bcast", 4096, NULL, 3, NULL);
+    /* smartghar protocol WS — consumed by the HA integration v0.7.1+
+     * for real-time presence updates. 3 s push cadence, separate fd
+     * pool from /api/live so PWA + HA can run side-by-side. */
+    static const httpd_uri_t v1_stream_route = {
+        .uri = "/api/v1/stream", .method = HTTP_GET,
+        .handler = handle_v1_stream, .user_ctx = NULL,
+        .is_websocket = true, .handle_ws_control_frames = false,
+    };
+    httpd_register_uri_handler(s_web.srv, &v1_stream_route);
 
-    ESP_LOGI(TAG, "Web server listening on :80 (%zu routes + ws)",
-             sizeof(k_routes)/sizeof(k_routes[0]) + 1);
+    xTaskCreate(ws_broadcast_task,        "ws_bcast",      4096, NULL, 3, NULL);
+    xTaskCreate(v1_stream_broadcast_task, "v1_strm_bcast", 4096, NULL, 3, NULL);
+
+    ESP_LOGI(TAG, "Web server listening on :80 (%zu routes + 2 ws)",
+             sizeof(k_routes)/sizeof(k_routes[0]));
     return ESP_OK;
 }
