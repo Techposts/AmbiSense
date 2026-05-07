@@ -6,11 +6,9 @@
  * Single-button polling driver designed for the C3 SuperMini's BOOT
  * button (GPIO 9, active-low, internal pull-up). Drives three callbacks:
  *
- *   short  — press < 1 s. Could be used for "toggle LEDs" later; unused
- *            in v6.0.
- *   long   — press >= 3 s. Wired to mesh_open_pairing(): the standard
- *            "physically pair this device" gesture.
- *   verylong — press >= 10 s. Wired to factory reset (TODO; not in v6.0).
+ *   short    — press < 1 s. Reserved for future use (e.g. toggle LEDs).
+ *   long     — press >= 3 s. Reserved for v6.1 factory reset.
+ *   verylong — press >= 10 s. Reserved.
  *
  * Polled at 50 Hz from a tiny dedicated task. Polling beats GPIO ISRs for
  * mechanical buttons because the state machine inherently debounces — a

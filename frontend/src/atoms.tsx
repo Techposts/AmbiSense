@@ -18,7 +18,6 @@ export const Icon = ({ name, size = 16, stroke = 1.6, style }: {
     dashboard: <><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></>,
     led: <><path d="M12 3v3M12 18v3M5 12H2M22 12h-3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/><circle cx="12" cy="12" r="4"/></>,
     motion: <><path d="M3 12h3l3-7 4 14 3-7h5"/></>,
-    mesh: <><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M12 7v10M10.5 6.5l-5 11M13.5 6.5l5 11"/></>,
     chip: <><rect x="6" y="6" width="12" height="12" rx="1.5"/><path d="M9 1v3M12 1v3M15 1v3M9 20v3M12 20v3M15 20v3M1 9h3M1 12h3M1 15h3M20 9h3M20 12h3M20 15h3"/></>,
     wifi: <><path d="M2 8.5C5 6 8.5 4.5 12 4.5s7 1.5 10 4M5 12c2-1.7 4.5-2.5 7-2.5s5 .8 7 2.5M8.5 15.5c1-.8 2.2-1.2 3.5-1.2s2.5.4 3.5 1.2"/><circle cx="12" cy="19" r="1" fill="currentColor"/></>,
     settings: <><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8a2 2 0 1 1-2.8 2.8a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3a2 2 0 1 1-2.8-2.8a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8a2 2 0 1 1 2.8-2.8a1.7 1.7 0 0 0 1.8.3a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3a2 2 0 1 1 2.8 2.8a1.7 1.7 0 0 0-.3 1.8a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4z"/></>,
@@ -146,36 +145,6 @@ export function DualHandleRange({ minVal, maxVal, onChange, min = 0, max = 500 }
       <div onPointerDown={() => setDrag('min')} style={`position: absolute; top: 50%; left: calc(${tMin*100}% - 9px); transform: translateY(-50%); width: 18px; height: 18px; border-radius: 50%; background: var(--text-0); border: 3px solid var(--acc-orange); cursor: grab; box-shadow: var(--shadow-1);`}/>
       <div onPointerDown={() => setDrag('max')} style={`position: absolute; top: 50%; left: calc(${tMax*100}% - 9px); transform: translateY(-50%); width: 18px; height: 18px; border-radius: 50%; background: var(--text-0); border: 3px solid var(--acc-orange); cursor: grab; box-shadow: var(--shadow-1);`}/>
     </div>
-  );
-}
-
-/* SVG topology diagrams used by Mesh screen. */
-export function TopologyDiagram({ kind, size = 96 }: { kind: 'straight'|'l_shape'|'u_shape'|'custom'; size?: number }) {
-  const stroke = 'var(--text-2)';
-  const acc = 'var(--acc-orange)';
-  if (kind === 'straight') return (
-    <svg viewBox="0 0 100 60" width="100%" style={`height: ${size*0.6}px;`}>
-      <line x1="10" y1="30" x2="90" y2="30" stroke={stroke} stroke-width="2"/>
-      {[10, 50, 90].map((x, i) => <circle key={i} cx={x} cy="30" r="4" fill={acc}/>)}
-    </svg>
-  );
-  if (kind === 'l_shape') return (
-    <svg viewBox="0 0 100 100" width="100%" style={`height: ${size}px;`}>
-      <polyline points="20,20 20,80 80,80" stroke={stroke} stroke-width="2" fill="none"/>
-      {[[20,20],[20,50],[20,80],[50,80],[80,80]].map(([x,y], i) => <circle key={i} cx={x} cy={y} r="4" fill={acc}/>)}
-    </svg>
-  );
-  if (kind === 'u_shape') return (
-    <svg viewBox="0 0 100 100" width="100%" style={`height: ${size}px;`}>
-      <polyline points="15,20 15,80 85,80 85,20" stroke={stroke} stroke-width="2" fill="none"/>
-      {[[15,20],[15,50],[15,80],[50,80],[85,80],[85,50],[85,20]].map(([x,y], i) => <circle key={i} cx={x} cy={y} r="4" fill={acc}/>)}
-    </svg>
-  );
-  return (
-    <svg viewBox="0 0 100 100" width="100%" style={`height: ${size}px;`}>
-      <path d="M 15 30 Q 40 10 55 40 T 85 70" stroke={stroke} stroke-width="2" fill="none" stroke-dasharray="3 3"/>
-      {[[15,30],[40,22],[55,40],[70,52],[85,70]].map(([x,y], i) => <circle key={i} cx={x} cy={y} r="4" fill={acc}/>)}
-    </svg>
   );
 }
 

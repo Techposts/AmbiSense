@@ -1,13 +1,18 @@
 /*
- * AmbiSense v6 — application entry.
+ * AmbiSense v6.x — application entry (single-sensor architecture).
  *
  * Boot order:
- *   1. settings_init  — bring up NVS (replaces v5 EEPROM)
+ *   1. settings_init  — bring up NVS
  *   2. resolve board  — NVS-saved board id wins over compile-time default
  *   3. status LED     — boot pattern; flips later as Wi-Fi / OTA progresses
+ *   4. auth + netmgr + webui
+ *   5. radar (LD2450) + motion smoother + LED engine
+ *   6. button (long-press reserved for v6.x factory reset)
  *
- * Subsequent PRs add Wi-Fi (PR #2), web server (PR #2), radar (PR #3),
- * LED engine (PR #3), peer mesh (PR #4), and the real UI (PR #5).
+ * v6.x dropped the dual-device ESP-NOW master/slave + pairing flow that
+ * shipped in v6.0. One device = one radar = one LED strip; geometry
+ * (straight / L / U) is derived from the LD2450's x/y target stream
+ * inside the LED engine, not from a peer mesh.
  */
 
 #include <string.h>
@@ -30,8 +35,6 @@
 #include "radar.h"
 #include "motion.h"
 #include "led_engine.h"
-#include "topology.h"
-#include "mesh.h"
 #include "button.h"
 
 static const char *TAG = "ambisense";
@@ -93,82 +96,41 @@ static void apply_pin_overrides(board_profile_t *runtime) {
     }
 }
 
-/* Mesh layer event reactions: surface peer joins / pair window edges /
- * incoming identify pings on the onboard status LED. Identify is the
- * UX-critical one — when the user clicks "Identify" on this device's
- * card in the web UI, the LED hammers at 10 Hz for 5 s so they can
- * physically locate which board is which during stair installation. */
-static void on_mesh_event(mesh_event_t evt, const uint8_t mac[6]) {
-    (void)mac;
-    switch (evt) {
-        case MESH_EVT_PEER_JOINED:
-            ESP_LOGI(TAG, "EVT peer joined %02x:%02x:%02x:%02x:%02x:%02x",
-                     mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-            /* Brief 1 s "OK" pulse — visible but unobtrusive. */
-            status_led_oneshot(STATUS_LED_OTA, 1000);
-            break;
-        case MESH_EVT_IDENTIFY_REQUESTED:
-            ESP_LOGI(TAG, "EVT identify requested by peer");
-            status_led_oneshot(STATUS_LED_IDENTIFY, 5000);
-            break;
-        case MESH_EVT_PAIRING_OPENED:
-            ESP_LOGI(TAG, "EVT pairing window opened");
-            status_led_oneshot(STATUS_LED_PAIRING, 30000);
-            break;
-        case MESH_EVT_PAIRING_CLOSED:
-            ESP_LOGI(TAG, "EVT pairing window closed");
-            /* The oneshot expires automatically; nothing to do here. */
-            break;
-    }
-}
-
-/* Button events: long-press (3 s) opens the pairing window — the standard
- * "physically pair this device" gesture. The mesh event callback above
- * then drives the LED. Short / very-long are reserved for future use. */
+/* Button events. Long-press is reserved for v6.x factory-reset; short and
+ * very-long are placeholders so the API stays stable. */
 static void on_button(button_event_t evt) {
     switch (evt) {
         case BUTTON_PRESS_SHORT:
-            ESP_LOGI(TAG, "Button: short press (no-op in v6.0)");
+            ESP_LOGI(TAG, "Button: short press (no-op)");
             break;
         case BUTTON_PRESS_LONG:
-            ESP_LOGI(TAG, "Button: long press → opening pairing window");
-            mesh_open_pairing();
+            ESP_LOGI(TAG, "Button: long press (factory reset reserved for v6.1)");
             break;
         case BUTTON_PRESS_VERYLONG:
-            ESP_LOGW(TAG, "Button: very-long press (factory reset reserved for v6.1)");
+            ESP_LOGW(TAG, "Button: very-long press (reserved)");
             break;
     }
 }
 
-/* Telemetry pump: 20 Hz publish mesh-fused target + raw + RSSI + peer
- * health to webui WS clients. Was 5 Hz — bumped to kill the visible
- * stair-step jitter on the live distance graph. 20 Hz × ~120-byte JSON
- * = 2.5 KB/s on the WiFi link, trivial. Pulls raw_cm from local
- * motion_get() because mesh fused only carries the smoothed value. */
+/* Telemetry pump: 20 Hz publish of the local smoothed target + raw
+ * distance + RSSI to webui WS clients. With single-sensor there is no
+ * fused/peer view — we just forward what motion produced. */
 static void telemetry_pump_task(void *arg) {
     (void)arg;
     while (1) {
-        mesh_fused_t f;
-        mesh_get_fused(&f);
         target_t local;
         motion_get(&local);
-        mesh_peer_t peers[MESH_MAX_PEERS];
-        size_t pn = mesh_peers_snapshot(peers, MESH_MAX_PEERS);
-        size_t hn = 0;
-        for (size_t i = 0; i < pn; ++i) if (peers[i].healthy) hn++;
 
         webui_live_t live = {
-            .distance_cm = f.distance_cm,
+            .distance_cm = local.distance_cm,
             .raw_cm      = local.raw_cm,
-            .direction   = f.direction,
+            .direction   = local.direction,
             .rssi        = netmgr_get_rssi(),
             .free_heap   = 0,
             .uptime_s    = 0,
-            .peer_count   = (uint8_t)pn,
-            .peer_healthy = (uint8_t)hn,
         };
         webui_publish_live(&live);
-        vTaskDelay(pdMS_TO_TICKS(50));   /* 20 Hz — see comment above */
+        vTaskDelay(pdMS_TO_TICKS(50));   /* 20 Hz */
     }
 }
 
@@ -213,7 +175,7 @@ void app_main(void) {
 
     /* Radar + motion smoother + LED engine. The render task pulls smoothed
      * targets from motion_q and drives the strip at 60 Hz; the radar task
-     * parses UART frames; the motion task runs the PI smoother in between. */
+     * parses UART frames; the motion task runs the smoother in between. */
     radar_config_t rcfg = {
         .uart_num = runtime.uart_num,
         .rx_pin   = runtime.radar_rx_pin,
@@ -226,13 +188,7 @@ void app_main(void) {
         ESP_LOGE(TAG, "led_engine_init on GPIO %u failed", runtime.led_pin);
     }
 
-    /* Topology + ESP-NOW peer mesh. Comes after netmgr because esp_now_init
-     * requires Wi-Fi started. */
-    topology_init();
-    if (mesh_init() != ESP_OK) ESP_LOGW(TAG, "mesh_init failed (single-device fallback)");
-    mesh_set_event_cb(on_mesh_event);
-
-    /* Physical BOOT button — long-press (3 s) opens pairing window. */
+    /* Physical BOOT button — long-press reserved for v6.1 factory reset. */
     if (runtime.button_pin != BOARD_PIN_NONE) {
         if (button_init(runtime.button_pin, true /* active_low */, on_button) != ESP_OK) {
             ESP_LOGW(TAG, "button_init on GPIO %u failed", runtime.button_pin);

@@ -1,13 +1,13 @@
-/** All seven screens: Live, LEDs, Motion, Mesh, Hardware, Network, System.
- *  Faithful port of frontend/design-source/. Every control wires to a real
+/** Six screens: Live, LEDs, Motion, Hardware, Network, System.
+ *  Single-device architecture (v6.x): every control wires to a local
  *  /api/* endpoint with optimistic updates + toast confirmation. */
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Card, Toggle, Field, Slider, Row, Dot, ColorPicker as PaletteColorPicker, useToaster } from './components';
 import { LedPreview, LED_MODE_NAMES } from './led_preview';
-import { Icon, Sparkline, fmtUptime, NumberAndSlider, DualHandleRange, TopologyDiagram, LineChart, hsv2rgb, rgb2hex, hex2rgb } from './atoms';
+import { Icon, Sparkline, fmtUptime, NumberAndSlider, DualHandleRange, LineChart, hsv2rgb, rgb2hex, hex2rgb } from './atoms';
 import { getJSON, postJSON, postBinary } from './api';
 
-interface Live { distance: number; direction: number; rssi: number; heap: number; uptime: number; peers: number; healthy: number; }
+interface Live { distance: number; direction: number; rssi: number; heap: number; uptime: number; }
 export interface AppState {
   live: Live;
   settings: any;
@@ -97,8 +97,8 @@ export function ScreenLive({ live, version, settings, setToast }: AppState) {
 
   return (
     <>
-      <PageHead title="Live" sub="Real-time radar, mesh, and LED output"
-        right={<span class="chip"><span class="dot dot-ok"/> WS connected · 5 Hz</span>}/>
+      <PageHead title="Live" sub="Real-time radar and LED output"
+        right={<span class="chip"><span class="dot dot-ok"/> WS connected · 20 Hz</span>}/>
 
       <div class="card" style={`padding: 18px; display: flex; align-items: center; gap: 16px; margin-bottom: 14px; ${sysEn ? 'background: linear-gradient(135deg, rgba(255,181,74,0.06), rgba(255,61,130,0.06)); border-color: rgba(255,122,61,0.25);' : ''}`}>
         <div style={`width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; background: ${sysEn ? 'var(--acc-grad)' : 'var(--bg-3)'}; color: ${sysEn ? '#1A0F08' : 'var(--text-3)'};`}>
@@ -106,7 +106,7 @@ export function ScreenLive({ live, version, settings, setToast }: AppState) {
         </div>
         <div style="flex: 1;">
           <div style="font-size: 15px; font-weight: 600;">System {sysEn ? 'active' : 'paused'}</div>
-          <div style="font-size: 12px; color: var(--text-2);">{sysEn ? 'Radar, mesh, and LED output running' : 'All output muted, mesh idle'}</div>
+          <div style="font-size: 12px; color: var(--text-2);">{sysEn ? 'Radar and LED output running' : 'All output muted'}</div>
         </div>
         <Toggle large value={sysEn} onChange={toggleSys}/>
       </div>
@@ -174,17 +174,6 @@ export function ScreenLive({ live, version, settings, setToast }: AppState) {
                 <DevField k="Firmware" v={version.version || '—'}/>
                 <DevField k="Board" v={version.board || '—'}/>
               </div>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-head"><span class="smallcaps">Mesh</span><span class="chip">{live.peers > 0 ? 'peer' : 'standalone'}</span></div>
-            <div class="card-body">
-              <div style="font-size: 12px; color: var(--text-2); margin-bottom: 10px;">{live.peers || 0} peer{(live.peers||0) === 1 ? '' : 's'} · {live.healthy||0} healthy</div>
-              {(live.peers || 0) === 0 && (
-                <div style="font-size: 12px; color: var(--text-3); padding: 12px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px;">
-                  No peers discovered. Open Mesh tab to start a 30 s pairing window.
-                </div>
-              )}
             </div>
           </div>
         </div>
@@ -522,199 +511,7 @@ export function ScreenMotion({ settings, live, reload, setToast }: AppState) {
 }
 
 /* ================================================================= */
-/*                          D. MESH                                  */
-/* ================================================================= */
-export function ScreenMesh({ live, settings, setToast, reload }: AppState) {
-  const [topology, setTopology] = useState<any>({ kind: 'straight', segments: [], total_leds: 30 });
-  const [mesh, setMesh] = useState<any>({ peers: [], fusion: 'most_recent', coordinator: true, pairing: false, pairing_ms_left: 0, my_mac: '' });
-  const [identifying, setIdentifying] = useState<string | null>(null);
-
-  const refresh = () => Promise.all([
-    getJSON('/api/topology').then(setTopology),
-    getJSON('/api/mesh').then(setMesh),
-  ]).catch(() => {});
-
-  /* Two polling cadences: 4 s when idle (cheap), 500 ms while pairing
-   * window is open (so the countdown ring updates in real time and we
-   * spot a new peer joining within half a second). The /api/mesh
-   * response carries pairing_ms_left from firmware — we never run a
-   * client-side countdown, so cancellation, OTA reboots, and pair-on-
-   * other-device events are all reflected accurately. */
-  useEffect(() => {
-    refresh();
-    const fast = mesh.pairing;
-    const id = setInterval(refresh, fast ? 500 : 4000);
-    return () => clearInterval(id);
-  }, [mesh.pairing]);
-
-  const startPair = async () => {
-    try { await postJSON('/api/mesh', { pair: true }); setToast('Pairing window open · 30 s'); refresh(); }
-    catch (e: any) { setToast(e.message || 'Pair failed', 'err'); }
-  };
-
-  const identifyPeer = async (mac: string) => {
-    setIdentifying(mac);
-    try {
-      await postJSON('/api/mesh/identify', { mac });
-      setToast(`Identifying ${mac.slice(-5)}…`);
-    } catch (e: any) {
-      setToast(e.message || 'Identify failed', 'err');
-    }
-    setTimeout(() => setIdentifying(null), 5000);
-  };
-
-  const setTopo = async (kind: string) => {
-    try { await postJSON('/api/topology', { kind }); setToast('Topology saved'); refresh(); }
-    catch (e: any) { setToast(e.message || 'Save failed', 'err'); }
-  };
-
-  const setFusion = async (f: string) => {
-    try { await postJSON('/api/mesh', { fusion: f }); setToast('Priority saved'); refresh(); }
-    catch (e: any) { setToast(e.message || 'Save failed', 'err'); }
-  };
-
-  const topologies = [
-    { id: 'straight', name: 'Straight', desc: 'Single hallway run' },
-    { id: 'l_shape',  name: 'L-shape',  desc: 'One corner, two flights' },
-    { id: 'u_shape',  name: 'U-shape',  desc: 'Two corners, three flights' },
-    { id: 'custom',   name: 'Custom',   desc: 'Position pixels manually' },
-  ];
-  const priorities = [
-    { id: 'most_recent',  name: 'Most recent',  desc: 'Whichever device just saw motion' },
-    { id: 'slave_first',  name: 'Slave first',  desc: 'Slaves win unless silent for 2 s' },
-    { id: 'master_first', name: 'Master first', desc: 'Master wins unless silent for 2 s' },
-    { id: 'zone_based',   name: 'Zone based',   desc: 'Each device owns its segment range' },
-  ];
-
-  const myMac: string = mesh.my_mac || '';
-  const pairSecsLeft = Math.ceil((mesh.pairing_ms_left || 0) / 1000);
-  const pairProgress = Math.max(0, Math.min(1, (mesh.pairing_ms_left || 0) / 30000));
-
-  /* Rendering "this device + all peers" as one unified list keeps the
-   * mental model "every device is equal" — coordinator is just whoever
-   * has the lowest MAC at any given moment. */
-  const allDevices = [
-    { mac: myMac || '—', name: settings.device_name || 'this device', role: mesh.coordinator ? 'coordinator' : 'follower', rssi: live.rssi || -50, healthy: true, self: true },
-    ...(mesh.peers || []).map((p: any) => ({ ...p, role: 'follower', name: p.mac.slice(-5).toUpperCase(), self: false })),
-  ];
-
-  return (
-    <>
-      <PageHead title="Mesh & Topology" sub={`${(mesh.peers?.length || 0) + 1} device${(mesh.peers?.length || 0) ? 's' : ''} · ESP-NOW · ${(topology.kind || 'straight').replace('_', '-')}`}
-        right={<button class="btn btn-primary" onClick={startPair} disabled={mesh.pairing}>
-          {mesh.pairing ? <><Icon name="link" size={13}/> Listening · {pairSecsLeft}s</> : <><Icon name="plus" size={13}/> Pair new device</>}
-        </button>}/>
-
-      {/* Pairing card with circular SVG countdown — visual anchor that
-        * communicates "the device is actively listening RIGHT NOW" much
-        * more clearly than a number. */}
-      {mesh.pairing && (
-        <div class="card" style="padding: 16px; margin-bottom: 14px; background: linear-gradient(135deg, rgba(255,181,74,0.08), rgba(255,61,130,0.08)); border-color: rgba(255,122,61,0.45);">
-          <div style="display: flex; align-items: center; gap: 16px;">
-            <svg width="56" height="56" viewBox="0 0 56 56" style="flex-shrink: 0;">
-              <circle cx="28" cy="28" r="22" fill="none" stroke="var(--line)" stroke-width="3"/>
-              <circle cx="28" cy="28" r="22" fill="none" stroke="url(#pairgrad)" stroke-width="3"
-                stroke-dasharray={`${pairProgress * 138.2} 138.2`}
-                stroke-linecap="round" transform="rotate(-90 28 28)"
-                style="transition: stroke-dasharray 0.4s linear;"/>
-              <defs>
-                <linearGradient id="pairgrad" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0%" stop-color="#FFB54A"/>
-                  <stop offset="50%" stop-color="#FF7A3D"/>
-                  <stop offset="100%" stop-color="#FF3D82"/>
-                </linearGradient>
-              </defs>
-              <text x="28" y="32" text-anchor="middle" font-size="13" font-weight="600" fill="var(--text-0)">{pairSecsLeft}</text>
-            </svg>
-            <div style="flex: 1; min-width: 0;">
-              <div style="font-size: 14px; font-weight: 600; margin-bottom: 2px;">Pairing window open</div>
-              <div style="font-size: 12px; color: var(--text-2); line-height: 1.5;">
-                On the other device, either hold the BOOT button for 3 seconds <em>or</em> open its web UI and click <b>Pair new device</b>. They auto-connect — no need to click on both.
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div class="card" style="margin-bottom: 14px;">
-        <div class="card-head"><span class="smallcaps">Topology</span></div>
-        <div class="card-body">
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px;">
-            {topologies.map(t => {
-              const active = topology.kind === t.id;
-              return (
-                <button onClick={() => setTopo(t.id)} style={`padding: 14px; border-radius: 10px; text-align: left; background: ${active ? 'linear-gradient(135deg, rgba(255,181,74,0.06), rgba(255,61,130,0.06))' : 'var(--bg-1)'}; border: ${active ? '1px solid rgba(255,122,61,0.55)' : '1px solid var(--line)'}; cursor: pointer; color: inherit;`}>
-                  <div style="height: 70px; margin-bottom: 8px;"><TopologyDiagram kind={t.id as any}/></div>
-                  <div style="font-size: 13px; font-weight: 600;">{t.name}</div>
-                  <div style="font-size: 11px; color: var(--text-3);">{t.desc}</div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      <div class="card" style="margin-bottom: 14px;">
-        <div class="card-head" style="display: flex; justify-content: space-between; align-items: center;">
-          <span class="smallcaps">Devices</span>
-          <span style="font-size: 11px; color: var(--text-3);">Click <b>Identify</b> to make a device blink — useful while wiring topology</span>
-        </div>
-        <div class="card-body" style="display: flex; flex-direction: column; gap: 8px;">
-          {allDevices.map((d: any) => {
-            const isIdentifying = identifying === d.mac;
-            return (
-              <div style={`display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: ${d.self ? 'linear-gradient(135deg, rgba(255,181,74,0.04), rgba(255,61,130,0.04))' : 'var(--bg-1)'}; border: 1px solid ${d.self ? 'rgba(255,122,61,0.35)' : 'var(--line-soft)'}; border-radius: 10px;`}>
-                <span class={`dot ${d.healthy ? 'dot-ok' : 'dot-err'}`}/>
-                <div style="flex: 1; min-width: 0;">
-                  <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-                    <span style="font-size: 13px; font-weight: 500;">{d.name}</span>
-                    <span class="chip" style="text-transform: capitalize;">{d.role}</span>
-                    {d.self && <span class="chip" style="background: rgba(255,122,61,0.15); color: var(--acc-orange);">this device</span>}
-                  </div>
-                  <div class="mono" style="font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis;">{d.mac}</div>
-                </div>
-                <div class="mono" style="font-size: 11px; color: var(--text-2); text-align: right; flex-shrink: 0;">
-                  <div>{d.rssi || '—'} dBm</div>
-                </div>
-                {!d.self && (
-                  <button class="btn btn-sm btn-ghost" disabled={isIdentifying}
-                    onClick={() => identifyPeer(d.mac)} style="flex-shrink: 0;">
-                    {isIdentifying ? <><Icon name="check" size={12}/> Blinking…</> : <><Icon name="search" size={12}/> Identify</>}
-                  </button>
-                )}
-              </div>
-            );
-          })}
-          {allDevices.length <= 1 && (
-            <div style="font-size: 12px; color: var(--text-3); padding: 12px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px;">
-              No peers paired yet. Click <b>Pair new device</b> above to start a 30-second pairing window.
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-head"><span class="smallcaps">Sensor priority</span></div>
-        <div class="card-body">
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px;">
-            {priorities.map(p => {
-              const active = mesh.fusion === p.id;
-              return (
-                <button onClick={() => setFusion(p.id)} style={`padding: 14px; border-radius: 10px; text-align: left; background: ${active ? 'linear-gradient(135deg, rgba(255,181,74,0.06), rgba(255,61,130,0.06))' : 'var(--bg-1)'}; border: ${active ? '1px solid rgba(255,122,61,0.55)' : '1px solid var(--line)'}; cursor: pointer; color: inherit;`}>
-                  <div style="font-size: 13px; font-weight: 600;">{p.name}</div>
-                  <div style="font-size: 11px; color: var(--text-3); margin-top: 2px;">{p.desc}</div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    </>
-  );
-}
-
-/* ================================================================= */
-/*                          E. HARDWARE                              */
+/*                          D. HARDWARE                              */
 /* ================================================================= */
 export function ScreenHardware({ setToast, reload }: AppState) {
   const [profiles, setProfiles] = useState<any>(null);

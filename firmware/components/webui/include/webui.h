@@ -5,11 +5,11 @@
  *
  * One esp_http_server instance with all /api/... routes plus root + captive-
  * portal redirect endpoints (so iOS/Android pop the setup page in AP
- * mode). PR #5 replaces the inline placeholder HTML with the full Preact
- * UI served from LittleFS.
+ * mode).
  *
- * Stub state hooks let PR #3/#4 push live data (distance, RSSI, mesh
- * health) without webui having to depend on radar/mesh components.
+ * Single-device architecture: every endpoint is local; there is no peer /
+ * mesh / pairing API surface. Live data publishes the device's own radar
+ * snapshot at 20 Hz over /api/live WS.
  */
 
 #include <stdbool.h>
@@ -22,10 +22,8 @@ extern "C" {
 
 esp_err_t webui_init(void);
 
-/* Live state hooks. PR #2 publishes Wi-Fi telemetry; PR #3 publishes
- * distance + radar; PR #4 publishes peer health.
- * Updates are coalesced and emitted to all connected /api/live WS
- * clients at ~5 Hz. */
+/* Live state hooks. Updates are coalesced and emitted to all connected
+ * /api/live WS clients at 20 Hz. */
 typedef struct {
     int16_t distance_cm;       /* smoothed + predicted */
     int16_t raw_cm;            /* median-filtered but un-smoothed; lets the
@@ -35,8 +33,6 @@ typedef struct {
     int8_t  rssi;
     uint32_t free_heap;
     uint32_t uptime_s;
-    uint8_t peer_count;
-    uint8_t peer_healthy;
 } webui_live_t;
 
 void webui_publish_live(const webui_live_t *snap);

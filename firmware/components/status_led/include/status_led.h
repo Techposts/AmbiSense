@@ -33,8 +33,6 @@ typedef enum {
     STATUS_LED_OTA,
     STATUS_LED_ERROR,
     STATUS_LED_PANIC,
-    STATUS_LED_PAIRING,    /* very fast blink — pairing window open */
-    STATUS_LED_IDENTIFY,   /* hard fast blink — short physical-locate burst */
 } status_led_pattern_t;
 
 /* gpio_num: BCM-style GPIO number; active_low: true if onboard LED sinks
@@ -45,8 +43,8 @@ esp_err_t status_led_init(uint8_t gpio_num, bool active_low);
 void status_led_set_pattern(status_led_pattern_t pattern);
 
 /* Run `pattern` for `duration_ms`, then automatically revert to whatever
- * the last stable pattern was. Used by mesh pairing/identify so callers
- * don't have to track state and revert manually. */
+ * the last stable pattern was. Lets transient subsystems flash a status
+ * code without having to track and restore prior state. */
 void status_led_oneshot(status_led_pattern_t pattern, uint32_t duration_ms);
 
 #ifdef __cplusplus

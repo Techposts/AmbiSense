@@ -4,16 +4,20 @@ For locked architectural decisions about which boards/sensors are
 supported, see [`V6-ARCHITECTURE.md`](V6-ARCHITECTURE.md). This file
 covers the practical "I have hardware in front of me" stuff.
 
-## Board recommendation (read this first)
+## Board recommendation (v6.x)
 
 | Tier | Board | Why |
 | ---- | ----- | --- |
-| **Recommended** | **ESP32-S3 DevKitC-1** *or* **ESP32-S3-Zero** | Dual-core LX7 @ 240 MHz, native USB-OTG (no CH340 driver fights), 512 KB SRAM. Wi-Fi/HTTP can be pinned to core 0 and radar+LED+motion to core 1 — slider floods can't starve the render loop. Headroom for v6.1 features (auto-topology, encrypted ESP-NOW, larger strips). Best choice for a stairwell with mesh peers. |
-| **Supported** | **ESP32-C3 SuperMini** | Single-core RISC-V @ 160 MHz. The validated v6.0 reference build. Fine for **single-strip, single-device** installs. The 300 ms client-side debounced-save shipped with v6.0 prevents HTTP saturation under slider drag. Stops being the right choice the moment you want >2 mesh peers or >300 LEDs. |
-| **Deprecated** | ESP32 classic (WROOM-32) | Older silicon, no native USB, no advantage over S3. Profile still builds; not recommended for new installs. |
+| **Recommended (v6.x PCB target)** | **ESP32-C3 SuperMini** | Single-core RISC-V @ 160 MHz. With v6.x's single-sensor architecture (no peer broadcast, no second sensor to fuse) the C3 has plenty of headroom for radar UART + Kalman + LED render + Wi-Fi/HTTP on one core. The 300 ms client-side debounced-save handles slider-drag flood without saturating httpd. **This is the target board for the v6.x kit PCB.** |
+| **Supported** | ESP32-S3 DevKitC-1 / S3-Zero | Dual-core LX7 @ 240 MHz, native USB-OTG. Overkill for a single-sensor install but profile still builds and validates. Use if you already own one or if you want to drive >300 LEDs from a single device. |
+| **Deprecated** | ESP32 classic (WROOM-32) | Older silicon, no native USB, no advantage. Profile still builds. |
 | **Avoid** | ESP32-C6 | Single-core, *less* SRAM than C3, and Wi-Fi 6 / Thread don't help AmbiSense. |
 
-If you're starting from scratch and asked us "which board do I buy" → **S3-Zero**. If you already have a C3 SuperMini on the bench → it works.
+**v6.0 vs v6.x recommendation:** v6.0 recommended S3 because dual-device
+peer mesh + per-peer fusion + ESP-NOW broadcast on a single C3 core ran
+hot under load. v6.x removes all of that, so the C3 — with its smaller
+package, native USB-Serial-JTAG, and ~$3 BOM cost — becomes the right
+default for a kit product.
 
 ## Reference wiring (ESP32-C3 SuperMini)
 
@@ -45,21 +49,47 @@ strapping/USB-JTAG/flash pins (GPIOs 9, 11–19 on C3).
 - **Common ground**: tie the LED PSU's GND to the C3's GND so the
   data signal references correctly.
 
-## Sensor reference wiring
+## Sensor reference wiring (LD2450 only)
 
-Both LD2410 and LD2450 use 256000 baud UART, 5 V VCC, identical pinout:
+LD2450 uses 256000 baud UART, 5 V VCC, 3.3 V logic on TX/RX (direct
+connect to ESP32-C3, no level shifter needed):
 
 ```
-Sensor       MCU (C3 SuperMini)
+LD2450       MCU (C3 SuperMini)
 ------       ------------------
 TX     →     GPIO 20 (radar_rx)
 RX     ←     GPIO 21 (radar_tx)
 VCC    ←     5V
 GND    ↔     GND
+OUT          unconnected (firmware reads everything via UART)
 ```
 
-LD2450 adds OUT pin (digital presence indicator) — leave unconnected
-for v6, the firmware reads everything via UART.
+**Sensor draw**: ~80 mA continuous on the 3.3 V logic side, with brief
+peaks during radar transmit bursts. The C3 SuperMini's onboard LDO can
+deliver this for a breadboard prototype but tends to run warm under
+sustained load.
+
+### PCB rev: discrete LDO recommendation
+
+For the v6.x custom PCB, do not feed the LD2450 from the C3's onboard
+3V3 pin. Use a discrete 3.3 V LDO sized for the combined C3 + radar
+load, feeding both rails:
+
+- **AP2112K-3.3** (600 mA, $0.10) or **MIC5219-3.3** (500 mA, $0.20).
+- Decoupling: 10 µF ceramic on input, 10 µF + 100 nF on output, placed
+  close to the LDO and the LD2450 VCC pin.
+- Star-ground the LED strip's GND return directly to the PSU (not
+  through the PCB ground plane) — strip current can otherwise inject
+  noise into the radar's reference.
+
+### Mounting constraint (single-sensor architecture)
+
+The LD2450 must have line-of-sight to **both arms** of the LED run.
+For an L-shape stair, mount at the inside corner. For a U-shape
+hallway, mount at the centre-back. The 60° horizontal cone, ~6 m
+range covers most residential geometries from a single sensor. For
+arms longer than 5 m, range-test at the far end before locking your
+kit configuration.
 
 ## Supported boards (v6.0)
 
@@ -80,19 +110,19 @@ Profiles defined in
 Adding a new board = +1 entry there + a build target in
 `.github/workflows/firmware.yml`.
 
-## Supported sensors (v6.0)
+## Supported sensors (v6.x)
 
 | Driver id  | Sensor          | Targets | x/y? |
 | ---------- | --------------- | ------- | ---- |
-| `ld2410`   | HiLink LD2410(B/C) | 1    | no   |
-| `ld2412`   | HiLink LD2412   | 1       | no   |
-| `ld2420`   | HiLink LD2420   | 1 (presence only) | no |
-| `ld2450`   | HiLink LD2450   | up to 3 | yes (LD2450 only) |
-| `sim`      | Synthetic       | scripted | optional |
+| `ld2450`   | HiLink LD2450   | up to 3 | yes  |
+| `sim`      | Synthetic       | scripted | yes |
 
-Switch sensors at runtime via the web UI without reflashing — the
-driver registry compiles every driver in and selects one from NVS at
-boot.
+The v6.0 LD2410-family drivers (`ld2410`, `ld2412`, `ld2420`) were
+removed in v6.x — they only emit single-target distance and were
+intended for the dual-device fusion model that v6.x dropped. The
+LD2450's (x, y, speed) target stream from a single sensor at the
+inside corner of the LED run covers L-shape and U-shape geometries
+without needing a second sensor.
 
 ## Troubleshooting
 

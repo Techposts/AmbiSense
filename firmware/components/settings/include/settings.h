@@ -7,16 +7,18 @@
  * per concern.  Each module owns its namespace; this header only exposes the
  * cross-cutting init + the board namespace (used by main during boot).
  *
- * Namespaces (one per concern, populated across PRs):
- *   sys    — device_name, role-related keys
- *   board  — board.id, pin overrides, radar_kind        ← PR #1 (this file)
- *   led    — count, brightness, rgb, mode, span, ...    ← PR #3
- *   dist   — min_cm, max_cm                             ← PR #3
- *   motion — pi smoother gains                          ← PR #3
- *   mesh   — peers blob, channel, encryption keys       ← PR #4
- *   topo   — topology kind + segments blob              ← PR #4
- *   wifi   — ssid, encrypted password, static ip        ← PR #2
- *   auth   — pbkdf2 hash of admin password              ← PR #2
+ * Namespaces (one per concern):
+ *   sys    — device_name
+ *   board  — board.id, pin overrides, radar_kind
+ *   led    — count, brightness, rgb, mode, span, ...
+ *   dist   — min_cm, max_cm
+ *   motion — smoother mode + Kalman/PI gains
+ *   wifi   — ssid, password, hostname, static ip
+ *   auth   — pbkdf2 hash of admin password
+ *
+ * Removed in v6.x single-sensor rewrite: `mesh` and `topo` namespaces
+ * (multi-device pairing + topology graph). Old keys may still exist in
+ * NVS on units upgraded from v6.0; they are simply never read.
  */
 
 #include <stdint.h>
@@ -35,8 +37,7 @@ esp_err_t settings_init(void);
 /* ---- board namespace ----------------------------------------------------
  * Stores: board.id (string), board.led_pin (u8), board.radar_rx (u8),
  *         board.radar_tx (u8), board.button (u8), board.status (u8),
- *         board.radar_kind (string: "ld2410" | "ld2412" | "ld2420" |
- *                                   "ld2450" | "sim")
+ *         board.radar_kind (string: "ld2450" | "sim")
  *
  * On first boot every key is missing; callers fall back to the board
  * profile defaults (see components/board).

@@ -21,14 +21,10 @@ typedef struct {
 } radar_driver_t;
 
 /* Forward decls — drivers live in radar_<kind>.c */
-extern size_t radar_ld2410_parse(const uint8_t *buf, size_t len, radar_frame_t *out);
 extern size_t radar_ld2450_parse(const uint8_t *buf, size_t len, radar_frame_t *out);
 extern size_t radar_sim_parse   (const uint8_t *buf, size_t len, radar_frame_t *out);
 
 static const radar_driver_t k_drivers[] = {
-    { "ld2410", radar_ld2410_parse },
-    { "ld2412", radar_ld2410_parse },  /* same family/protocol */
-    { "ld2420", radar_ld2410_parse },  /* presence subset */
     { "ld2450", radar_ld2450_parse },
     { "sim",    radar_sim_parse    },
 };

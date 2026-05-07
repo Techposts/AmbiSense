@@ -63,18 +63,6 @@ static void run_pattern(status_led_pattern_t p) {
             led_set(false); vTaskDelay(pdMS_TO_TICKS(100));
             return;
 
-        case STATUS_LED_PAIRING:
-            /* 5 Hz fast blink — clearly distinguishable from STA/AP. */
-            led_set(true);  vTaskDelay(pdMS_TO_TICKS(100));
-            led_set(false); vTaskDelay(pdMS_TO_TICKS(100));
-            return;
-
-        case STATUS_LED_IDENTIFY:
-            /* 10 Hz hammer blink — unmistakable for "this is me". */
-            led_set(true);  vTaskDelay(pdMS_TO_TICKS(50));
-            led_set(false); vTaskDelay(pdMS_TO_TICKS(50));
-            return;
-
         case STATUS_LED_ERROR:
             led_set(true);  vTaskDelay(pdMS_TO_TICKS(600));
             led_set(false); vTaskDelay(pdMS_TO_TICKS(150));

@@ -26,8 +26,6 @@
 #include "board.h"
 #include "led_engine.h"
 #include "radar.h"
-#include "topology.h"
-#include "mesh.h"
 #include "motion.h"
 
 static const char *TAG = "webui";
@@ -614,12 +612,12 @@ static esp_err_t handle_board_post(httpd_req_t *req) {
 static esp_err_t handle_radar_kinds(httpd_req_t *req) {
     cJSON *r = cJSON_CreateObject();
     cJSON *arr = cJSON_AddArrayToObject(r, "kinds");
+    /* v6.x ships LD2450 only — its (x, y, speed) target stream covers
+     * straight / L-shape / U-shape geometries from a single sensor. The
+     * `sim` driver is retained for desk testing without a radar attached. */
     static const struct { const char *id; const char *display; bool xy; const char *note; } K[] = {
-        { "ld2410", "HiLink LD2410(B/C)", false, "single-target distance + presence (24 GHz)" },
-        { "ld2412", "HiLink LD2412",      false, "per-gate sensitivity tunable (24 GHz)" },
-        { "ld2420", "HiLink LD2420",      false, "presence only (24 GHz)" },
-        { "ld2450", "HiLink LD2450",      true,  "up to 3 targets, x/y/speed (24 GHz)" },
-        { "sim",    "Simulator",          true,  "synthetic distance traces for testing" },
+        { "ld2450", "HiLink LD2450", true, "up to 3 targets, x/y/speed (24 GHz)" },
+        { "sim",    "Simulator",     true, "synthetic distance traces for testing" },
     };
     for (size_t i = 0; i < sizeof(K)/sizeof(K[0]); ++i) {
         cJSON *o = cJSON_CreateObject();
@@ -631,7 +629,7 @@ static esp_err_t handle_radar_kinds(httpd_req_t *req) {
     }
     char active[16] = {0};
     settings_get_radar_kind(active, sizeof(active));
-    cJSON_AddStringToObject(r, "active", active[0] ? active : "ld2410");
+    cJSON_AddStringToObject(r, "active", active[0] ? active : "ld2450");
     return send_json(req, r);
 }
 
@@ -705,10 +703,6 @@ static esp_err_t handle_settings_get(httpd_req_t *req) {
     add_u32_if(r, "motion", "pg", "p_gain_x1k");
     add_u32_if(r, "motion", "ig", "i_gain_x1k");
 
-    /* Topology */
-    add_u8_if (r, "topo", "kind", "topology");
-    add_u32_if(r, "topo", "tot", "total_leds");
-
     cJSON_AddBoolToObject(r, "auth_enabled", auth_is_enabled());
     return send_json(req, r);
 }
@@ -746,8 +740,6 @@ static const struct setting_map {
     { "predict_x1k",      "motion", "pf",         '4' },
     { "p_gain_x1k",       "motion", "pg",         '4' },
     { "i_gain_x1k",       "motion", "ig",         '4' },
-    { "topology",         "topo",   "kind",       '8' },
-    { "total_leds",       "topo",   "tot",        '4' },
 };
 
 static esp_err_t handle_settings_post(httpd_req_t *req) {
@@ -823,168 +815,6 @@ static esp_err_t handle_radar_diag(httpd_req_t *req) {
 }
 
 /* ============================================================
- *  /api/mesh — peers, fusion, pairing
- * ============================================================ */
-static esp_err_t handle_mesh_get(httpd_req_t *req) {
-    cJSON *r = cJSON_CreateObject();
-    cJSON_AddBoolToObject(r, "coordinator", mesh_is_coordinator());
-    cJSON_AddBoolToObject(r, "pairing", mesh_in_pairing());
-    cJSON_AddNumberToObject(r, "pairing_ms_left", mesh_pairing_remaining_ms());
-    static const char *FUSE_NAMES[] = {"most_recent","slave_first","master_first","zone_based"};
-    cJSON_AddStringToObject(r, "fusion", FUSE_NAMES[mesh_get_fusion()]);
-
-    /* Our own MAC — UI uses it to highlight "this device" in the peers
-     * card and to filter ourselves out of identify-target dropdowns. */
-    uint8_t mymac[6];
-    esp_read_mac(mymac, ESP_MAC_WIFI_STA);
-    char myms[18];
-    snprintf(myms, sizeof(myms), "%02x:%02x:%02x:%02x:%02x:%02x",
-             mymac[0], mymac[1], mymac[2], mymac[3], mymac[4], mymac[5]);
-    cJSON_AddStringToObject(r, "my_mac", myms);
-
-    mesh_peer_t peers[MESH_MAX_PEERS];
-    size_t n = mesh_peers_snapshot(peers, MESH_MAX_PEERS);
-    cJSON *arr = cJSON_AddArrayToObject(r, "peers");
-    for (size_t i = 0; i < n; ++i) {
-        cJSON *o = cJSON_CreateObject();
-        char macstr[18];
-        snprintf(macstr, sizeof(macstr), "%02x:%02x:%02x:%02x:%02x:%02x",
-                 peers[i].mac[0], peers[i].mac[1], peers[i].mac[2],
-                 peers[i].mac[3], peers[i].mac[4], peers[i].mac[5]);
-        cJSON_AddStringToObject(o, "mac", macstr);
-        cJSON_AddNumberToObject(o, "distance_cm", peers[i].distance_cm);
-        cJSON_AddNumberToObject(o, "direction", peers[i].direction);
-        cJSON_AddNumberToObject(o, "rssi", peers[i].rssi);
-        cJSON_AddBoolToObject (o, "healthy", peers[i].healthy);
-        cJSON_AddItemToArray(arr, o);
-    }
-    return send_json(req, r);
-}
-
-static esp_err_t handle_mesh_post(httpd_req_t *req) {
-    if (!gate_auth(req)) return ESP_OK;
-    cJSON *j = read_body_json(req);
-    if (!j) return send_err(req, 400, "bad json");
-    cJSON *fuse = cJSON_GetObjectItem(j, "fusion");
-    if (fuse && cJSON_IsString(fuse)) {
-        mesh_fusion_t mode = MESH_FUSE_MOST_RECENT;
-        if      (strcmp(fuse->valuestring, "slave_first")  == 0) mode = MESH_FUSE_SLAVE_FIRST;
-        else if (strcmp(fuse->valuestring, "master_first") == 0) mode = MESH_FUSE_MASTER_FIRST;
-        else if (strcmp(fuse->valuestring, "zone_based")   == 0) mode = MESH_FUSE_ZONE_BASED;
-        mesh_set_fusion(mode);
-    }
-    cJSON *pair = cJSON_GetObjectItem(j, "pair");
-    if (pair && cJSON_IsTrue(pair)) mesh_open_pairing();
-    cJSON_Delete(j);
-    cJSON *r = cJSON_CreateObject();
-    cJSON_AddBoolToObject(r, "ok", true);
-    cJSON_AddBoolToObject(r, "pairing", mesh_in_pairing());
-    cJSON_AddNumberToObject(r, "pairing_ms_left", mesh_pairing_remaining_ms());
-    return send_json(req, r);
-}
-
-/* /api/mesh/identify {mac:"aa:bb:..."} — unicast IDENTIFY so the named
- * peer blinks its LED for 5 s. Lets the user physically map MACs to
- * actual stair locations during topology setup. */
-static esp_err_t handle_mesh_identify(httpd_req_t *req) {
-    if (!gate_auth(req)) return ESP_OK;
-    cJSON *j = read_body_json(req);
-    if (!j) return send_err(req, 400, "bad json");
-    cJSON *mac = cJSON_GetObjectItem(j, "mac");
-    if (!mac || !cJSON_IsString(mac)) { cJSON_Delete(j); return send_err(req, 400, "mac required"); }
-    unsigned m[6];
-    if (sscanf(mac->valuestring, "%x:%x:%x:%x:%x:%x", &m[0],&m[1],&m[2],&m[3],&m[4],&m[5]) != 6) {
-        cJSON_Delete(j);
-        return send_err(req, 400, "bad mac format");
-    }
-    cJSON_Delete(j);
-    uint8_t target[6] = { (uint8_t)m[0], (uint8_t)m[1], (uint8_t)m[2],
-                          (uint8_t)m[3], (uint8_t)m[4], (uint8_t)m[5] };
-    esp_err_t err = mesh_identify(target);
-    if (err != ESP_OK) return send_err(req, 500, "send failed");
-    cJSON *r = cJSON_CreateObject();
-    cJSON_AddBoolToObject(r, "ok", true);
-    cJSON_AddStringToObject(r, "note", "peer should blink for 5 s");
-    return send_json(req, r);
-}
-
-/* ============================================================
- *  /api/topology
- * ============================================================ */
-static esp_err_t handle_topology_get(httpd_req_t *req) {
-    const topology_t *t = topology_get();
-    cJSON *r = cJSON_CreateObject();
-    static const char *KIND_NAMES[] = {"straight","l_shape","u_shape","custom"};
-    cJSON_AddStringToObject(r, "kind", KIND_NAMES[t->kind <= TOPO_CUSTOM ? t->kind : 0]);
-    cJSON_AddNumberToObject(r, "version", t->version);
-    cJSON_AddNumberToObject(r, "total_leds", t->total_leds);
-    cJSON *arr = cJSON_AddArrayToObject(r, "segments");
-    for (uint8_t i = 0; i < t->segment_count; ++i) {
-        cJSON *o = cJSON_CreateObject();
-        char macstr[18];
-        snprintf(macstr, sizeof(macstr), "%02x:%02x:%02x:%02x:%02x:%02x",
-                 t->segments[i].mac[0], t->segments[i].mac[1], t->segments[i].mac[2],
-                 t->segments[i].mac[3], t->segments[i].mac[4], t->segments[i].mac[5]);
-        cJSON_AddStringToObject(o, "mac", macstr);
-        cJSON_AddNumberToObject(o, "led_start",   t->segments[i].led_start);
-        cJSON_AddNumberToObject(o, "led_end",     t->segments[i].led_end);
-        cJSON_AddNumberToObject(o, "dist_min_cm", t->segments[i].dist_min_cm);
-        cJSON_AddNumberToObject(o, "dist_max_cm", t->segments[i].dist_max_cm);
-        cJSON_AddBoolToObject (o, "reverse",      t->segments[i].reverse);
-        cJSON_AddItemToArray(arr, o);
-    }
-    return send_json(req, r);
-}
-
-static esp_err_t handle_topology_post(httpd_req_t *req) {
-    if (!gate_auth(req)) return ESP_OK;
-    cJSON *j = read_body_json(req);
-    if (!j) return send_err(req, 400, "bad json");
-
-    topology_t t = *topology_get();
-    cJSON *kind = cJSON_GetObjectItem(j, "kind");
-    if (kind && cJSON_IsString(kind)) {
-        if      (strcmp(kind->valuestring, "straight") == 0) t.kind = TOPO_STRAIGHT;
-        else if (strcmp(kind->valuestring, "l_shape")  == 0) t.kind = TOPO_L_SHAPE;
-        else if (strcmp(kind->valuestring, "u_shape")  == 0) t.kind = TOPO_U_SHAPE;
-        else if (strcmp(kind->valuestring, "custom")   == 0) t.kind = TOPO_CUSTOM;
-    }
-    cJSON *total = cJSON_GetObjectItem(j, "total_leds");
-    if (total && cJSON_IsNumber(total)) t.total_leds = (uint16_t)total->valueint;
-    cJSON *segs = cJSON_GetObjectItem(j, "segments");
-    if (segs && cJSON_IsArray(segs)) {
-        int n = cJSON_GetArraySize(segs);
-        if (n > TOPO_MAX_SEGMENTS) n = TOPO_MAX_SEGMENTS;
-        t.segment_count = (uint8_t)n;
-        for (int i = 0; i < n; ++i) {
-            cJSON *s = cJSON_GetArrayItem(segs, i);
-            if (!s) continue;
-            cJSON *mac = cJSON_GetObjectItem(s, "mac");
-            if (mac && cJSON_IsString(mac)) {
-                unsigned m[6];
-                if (sscanf(mac->valuestring, "%x:%x:%x:%x:%x:%x", &m[0],&m[1],&m[2],&m[3],&m[4],&m[5]) == 6) {
-                    for (int k = 0; k < 6; ++k) t.segments[i].mac[k] = (uint8_t)m[k];
-                }
-            }
-            cJSON *v;
-            v = cJSON_GetObjectItem(s, "led_start");   if (v && cJSON_IsNumber(v)) t.segments[i].led_start   = v->valueint;
-            v = cJSON_GetObjectItem(s, "led_end");     if (v && cJSON_IsNumber(v)) t.segments[i].led_end     = v->valueint;
-            v = cJSON_GetObjectItem(s, "dist_min_cm"); if (v && cJSON_IsNumber(v)) t.segments[i].dist_min_cm = v->valueint;
-            v = cJSON_GetObjectItem(s, "dist_max_cm"); if (v && cJSON_IsNumber(v)) t.segments[i].dist_max_cm = v->valueint;
-            v = cJSON_GetObjectItem(s, "reverse");     if (v) t.segments[i].reverse = cJSON_IsTrue(v) ? 1 : 0;
-        }
-    }
-    cJSON_Delete(j);
-    esp_err_t err = topology_set(&t, true);
-    if (err != ESP_OK) return send_err(req, 400, "invalid topology");
-    mesh_gossip_topology();
-    cJSON *r = cJSON_CreateObject();
-    cJSON_AddBoolToObject(r, "ok", true);
-    cJSON_AddNumberToObject(r, "version", topology_get()->version);
-    return send_json(req, r);
-}
-
-/* ============================================================
  *  /api/distance + /api/live (WebSocket)
  * ============================================================ */
 static esp_err_t handle_distance(httpd_req_t *req) {
@@ -1024,9 +854,9 @@ static void ws_broadcast_task(void *arg) {
 
         char json[200];
         int n = snprintf(json, sizeof(json),
-            "{\"distance\":%d,\"raw\":%d,\"direction\":%d,\"rssi\":%d,\"heap\":%" PRIu32 ",\"uptime\":%" PRIu32 ",\"peers\":%u,\"healthy\":%u}",
+            "{\"distance\":%d,\"raw\":%d,\"direction\":%d,\"rssi\":%d,\"heap\":%" PRIu32 ",\"uptime\":%" PRIu32 "}",
             snap.distance_cm, snap.raw_cm, snap.direction, snap.rssi,
-            snap.free_heap, snap.uptime_s, snap.peer_count, snap.peer_healthy);
+            snap.free_heap, snap.uptime_s);
 
         httpd_ws_frame_t f = {
             .final = true, .fragmented = false,
@@ -1115,11 +945,6 @@ static const httpd_uri_t k_routes[] = {
     { "/api/settings",                   HTTP_GET,  handle_settings_get,     NULL },
     { "/api/settings",                   HTTP_POST, handle_settings_post,    NULL },
     { "/api/distance",                   HTTP_GET,  handle_distance,         NULL },
-    { "/api/mesh",                       HTTP_GET,  handle_mesh_get,         NULL },
-    { "/api/mesh",                       HTTP_POST, handle_mesh_post,        NULL },
-    { "/api/mesh/identify",              HTTP_POST, handle_mesh_identify,    NULL },
-    { "/api/topology",                   HTTP_GET,  handle_topology_get,     NULL },
-    { "/api/topology",                   HTTP_POST, handle_topology_post,    NULL },
     { "/api/ota",                        HTTP_POST, handle_ota,              NULL },
 };
 
@@ -1129,7 +954,7 @@ esp_err_t webui_init(void) {
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.lru_purge_enable = true;
-    cfg.max_uri_handlers = 48;   /* was 32 — overflowed at 33 once mesh/topology/factory_reset/ping/system routes were added; the /api/live WS handler stopped registering and the dashboard could no longer get live data */
+    cfg.max_uri_handlers = 48;   /* generous headroom — IDF default of 8 is far too low for our route count, and an exhausted handler table silently drops late-registered routes (e.g. the /api/live WS) instead of erroring */
     cfg.max_open_sockets = 7;
     cfg.stack_size = 8192;
     cfg.recv_wait_timeout = 10;

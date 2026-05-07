@@ -8,11 +8,9 @@
  * binary unconditionally; selection is runtime so users can swap sensors
  * via the web UI without reflashing.
  *
- * v6.0 drivers:
- *   ld2410   — HiLink LD2410(B/C), 1 target, distance + energy
- *   ld2412   — HiLink LD2412 (alias of ld2410 for now; same protocol family)
- *   ld2420   — HiLink LD2420 presence (alias of ld2410)
- *   ld2450   — HiLink LD2450, up to 3 targets with x/y/speed
+ * v6.x drivers (single-sensor architecture, LD2450 only on shipping
+ * hardware; sim retained for desk testing without a radar attached):
+ *   ld2450   — HiLink LD2450, up to 3 targets with x/y/speed (24 GHz)
  *   sim      — synthetic trace generator for desk testing
  */
 
@@ -32,7 +30,7 @@ typedef struct {
     int16_t   distance_cm;         /* primary target distance, 0 if absent */
     int8_t    direction;           /* -1 closer, 0 still, +1 away */
     uint8_t   energy;              /* signal strength 0..100 (where exposed) */
-    uint8_t   target_count;        /* 1 for ld2410-family, 0..3 for ld2450 */
+    uint8_t   target_count;        /* 0..3 (LD2450 reports up to 3 simultaneous targets) */
     struct {
         int16_t  x_cm;             /* lateral; left negative, right positive */
         int16_t  y_cm;             /* radial */
