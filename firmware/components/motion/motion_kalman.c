@@ -93,16 +93,21 @@ int8_t kalman_direction(kalman_t *k, float vel, float vel_threshold_cm_s) {
         k->dir_agree = 0;
         return k->dir_committed;
     }
-    /* Different from committed → require 3 in a row to flip. This kills
-     * the per-tick direction jitter that radar produces near zero
-     * crossings (where the smoothed velocity oscillates around 0). */
+    /* Different from committed → require N consecutive ticks to flip.
+     * The motion task ticks at ~50 Hz, so each agree count is ~20 ms.
+     * Bumped from 3 (60 ms) to 10 (200 ms) on 2026-05-07 — at 3, a
+     * brief velocity blip from breathing or jitter would flip the
+     * chip; 200 ms requires the user to be genuinely moving for ~⅕ s
+     * before the indicator commits. Combined with the 10 cm/s
+     * velocity threshold (raised from 4 cm/s), this kills the rapid
+     * still ↔ closer ↔ away oscillation users were seeing. */
     if (sign == k->dir_pending) {
         if (k->dir_agree < 255) k->dir_agree++;
     } else {
         k->dir_pending = sign;
         k->dir_agree = 1;
     }
-    if (k->dir_agree >= 3) {
+    if (k->dir_agree >= 10) {
         k->dir_committed = k->dir_pending;
         k->dir_agree = 0;
     }

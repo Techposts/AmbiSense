@@ -133,8 +133,8 @@ static void run_pi(float filtered_raw, float dt, target_t *t) {
     t->distance_cm = (int16_t)final_d;
     /* PI mode reports raw sensor direction; smoothed velocity sign is
      * noisy near zero, so users get cleaner direction in Kalman mode. */
-    if (s_m.velocity > 4.f) t->direction = 1;
-    else if (s_m.velocity < -4.f) t->direction = -1;
+    if (s_m.velocity > 10.f) t->direction = 1;
+    else if (s_m.velocity < -10.f) t->direction = -1;
 }
 
 static void run_kalman(float filtered_raw, uint8_t energy, float dt, target_t *t) {
@@ -144,9 +144,13 @@ static void run_kalman(float filtered_raw, uint8_t energy, float dt, target_t *t
     if (predicted < s_m.min_cm) predicted = s_m.min_cm;
     if (predicted > s_m.max_cm) predicted = s_m.max_cm;
     t->distance_cm = (int16_t)predicted;
-    /* Direction with hysteresis. 4 cm/s threshold: below this we treat the
-     * target as stationary (returns 0). */
-    t->direction = kalman_direction(&s_m.kf, vel, 4.f);
+    /* Direction with hysteresis. 10 cm/s threshold: below this we treat the
+     * target as stationary. Bumped from 4 cm/s on 2026-05-07 — at 4 cm/s,
+     * a stationary person's breathing-level sway easily crossed the
+     * threshold and the chip flipped between still/closer/away every
+     * ~200 ms. 10 cm/s requires actual deliberate movement to register,
+     * which is what users perceive as "moving" anyway. */
+    t->direction = kalman_direction(&s_m.kf, vel, 10.f);
 }
 
 static void motion_task(void *arg) {
