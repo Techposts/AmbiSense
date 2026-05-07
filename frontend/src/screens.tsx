@@ -659,17 +659,39 @@ export function ScreenHardware({ setToast, reload }: AppState) {
 /* ================================================================= */
 /*                          F. NETWORK                               */
 /* ================================================================= */
+type JoinModalState =
+  | { phase: 'connecting'; ssid: string }
+  | { phase: 'success'; ssid: string; ip: string; hostname: string }
+  | { phase: 'failed'; ssid: string; error: string };
+
 export function ScreenNetwork({ setToast }: AppState) {
   const [wifi, setWifi] = useState<any>(null);
   const [scan, setScan] = useState<any[] | null>(null);
   const [pwd, setPwd] = useState('');
   const [host, setHost] = useState('');
-  const [apMode, setApMode] = useState('auto');
   const [confirm, setConfirm] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [joinSsid, setJoinSsid] = useState<string | null>(null);
+  const [joinModal, setJoinModal] = useState<JoinModalState | null>(null);
+  const cancelPoll = useRef<{ cancelled: boolean } | null>(null);
+  const joinCardRef = useRef<HTMLDivElement>(null);
+  const pwdInputRef = useRef<HTMLInputElement>(null);
 
-  const refresh = () => getJSON('/api/wifi').then(w => { setWifi(w); setApMode(w.ap_mode); setHost(w.hostname || ''); });
+  const refresh = () => getJSON('/api/wifi').then(w => { setWifi(w); setHost(w.hostname || ''); });
+
+  /* When Join is tapped, the password card slides in below the network
+   * list. On mobile that often lands off-screen, so scroll it into view
+   * and auto-focus the password input — saves a tap on mobile and an
+   * eyeball-flick on desktop. */
+  useEffect(() => {
+    if (!joinSsid) return;
+    /* Defer one tick so the join card has rendered. */
+    const t = setTimeout(() => {
+      joinCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      pwdInputRef.current?.focus();
+    }, 50);
+    return () => clearTimeout(t);
+  }, [joinSsid]);
   const doScan = async () => {
     setScanning(true);
     try { const r = await getJSON('/api/wifi/scan'); setScan(r.networks); }
@@ -678,17 +700,76 @@ export function ScreenNetwork({ setToast }: AppState) {
   };
   useEffect(() => { refresh(); }, []);
 
+  /* Drive the connecting -> success / failed flow:
+   *  1. POST credentials.
+   *  2. Poll /api/wifi every 1.5 s for up to 25 s.
+   *  3. As soon as sta_connected is true and an IP is assigned, flip
+   *     the modal to the success state showing the new URL — and STOP
+   *     polling (the AP will tear down a few seconds later, and the
+   *     frontend on the captive-portal browser would otherwise see
+   *     network errors after that point).
+   *  4. On 25 s timeout, show a failed modal — the firmware drops back
+   *     to AP mode automatically, so the user can retry without
+   *     re-pairing their phone to the AP. */
   const join = async () => {
     if (!joinSsid) return;
-    try { await postJSON('/api/wifi', { ssid: joinSsid, pass: pwd, hostname: host || undefined }); setToast('Saved · reconnecting'); setJoinSsid(null); setPwd(''); setTimeout(refresh, 4000); }
-    catch (e: any) { setToast(e.message || 'Join failed', 'err'); }
+    const ssidToJoin = joinSsid;
+    setJoinModal({ phase: 'connecting', ssid: ssidToJoin });
+    setJoinSsid(null);
+
+    cancelPoll.current = { cancelled: false };
+    const token = cancelPoll.current;
+
+    try {
+      await postJSON('/api/wifi', { ssid: ssidToJoin, pass: pwd, hostname: host || undefined });
+    } catch (e: any) {
+      if (!token.cancelled) setJoinModal({ phase: 'failed', ssid: ssidToJoin, error: e.message || 'Save failed' });
+      return;
+    }
+    setPwd('');
+
+    const start = Date.now();
+    const poll = async () => {
+      if (token.cancelled) return;
+      if (Date.now() - start > 25000) {
+        setJoinModal({ phase: 'failed', ssid: ssidToJoin, error: 'Connection timed out — check the password and try again.' });
+        return;
+      }
+      try {
+        const w = await getJSON('/api/wifi');
+        if (token.cancelled) return;
+        if (w.sta_connected && w.ip) {
+          setWifi(w);
+          setJoinModal({ phase: 'success', ssid: ssidToJoin, ip: w.ip, hostname: w.hostname || 'ambisense' });
+          return;
+        }
+      } catch {}
+      setTimeout(poll, 1500);
+    };
+    /* Initial 2.5 s delay: webui spawns wifi_apply_task with a 200 ms
+     * grace, then netmgr_set_credentials runs sync STA association.
+     * Polling sooner just wastes round-trips before any state could
+     * possibly have changed. */
+    setTimeout(poll, 2500);
   };
-  const saveApMode = async (m: string) => { setApMode(m); try { await postJSON('/api/wifi', { ap_mode: m }); setToast('AP mode saved'); refresh(); } catch (e: any) { setToast(e.message, 'err'); } };
+
+  const dismissJoinModal = () => {
+    if (cancelPoll.current) cancelPoll.current.cancelled = true;
+    setJoinModal(null);
+    refresh();
+  };
   const saveHost = async () => { try { await postJSON('/api/wifi', { hostname: host }); setToast('Hostname saved'); } catch (e: any) { setToast(e.message, 'err'); } };
+  /* "Reset Wi-Fi" is fire-and-forget from the browser's perspective —
+   * the device disconnects from STA before it finishes responding, so
+   * the POST will always either time out or error from this side. We
+   * show the success toast optimistically, then fire the request and
+   * swallow the inevitable network error. */
   const forget = async () => {
     if (!confirm) { setConfirm(true); return; }
-    try { await postJSON('/api/wifi', { forget_sta: true }); setToast('Reset · device returns to AP mode'); setConfirm(false); refresh(); }
-    catch (e: any) { setToast(e.message, 'err'); }
+    setConfirm(false);
+    setToast('Wi-Fi reset · device returning to AP mode');
+    try { await postJSON('/api/wifi', { forget_sta: true }); } catch { /* expected — STA dropped */ }
+    setTimeout(refresh, 2500);
   };
 
   if (!wifi) return <><PageHead title="Network"/><div class="card"><div class="card-body">Loading…</div></div></>;
@@ -744,49 +825,170 @@ export function ScreenNetwork({ setToast }: AppState) {
       </div>
 
       {joinSsid && (
-        <div class="card" style="margin-bottom: 14px; padding: 14px; border-color: var(--acc-orange);">
+        <div ref={joinCardRef} class="card" style="margin-bottom: 14px; padding: 14px; border-color: var(--acc-orange); scroll-margin-top: 80px;">
           <div class="smallcaps" style="margin-bottom: 8px;">Join "{joinSsid}"</div>
-          <input class="input" type="password" value={pwd} placeholder="Password (leave blank for open)" onInput={(e) => setPwd((e.target as HTMLInputElement).value)} style="margin-bottom: 8px;"/>
-          <div style="display: flex; gap: 8px;">
-            <button class="btn btn-primary" onClick={join}>Connect</button>
-            <button class="btn" onClick={() => { setJoinSsid(null); setPwd(''); }}>Cancel</button>
+          <input
+            ref={pwdInputRef}
+            class="input"
+            type="password"
+            value={pwd}
+            placeholder="Password (leave blank for open)"
+            onInput={(e) => setPwd((e.target as HTMLInputElement).value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') join(); }}
+            style="margin-bottom: 10px; width: 100%; box-sizing: border-box;"
+            autoComplete="current-password"
+          />
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button class="btn btn-primary" onClick={join} style="flex: 1; min-width: 100px;">Connect</button>
+            <button class="btn" onClick={() => { setJoinSsid(null); setPwd(''); }} style="flex: 0 0 auto;">Cancel</button>
           </div>
         </div>
       )}
 
-      <div class="hw-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
-        <div class="card">
-          <div class="card-head"><span class="smallcaps">Hostname</span></div>
-          <div class="card-body">
-            <span class="field-label">mDNS name</span>
-            <div style="display: flex; gap: 6px; align-items: center;">
-              <input class="input mono" value={host} onInput={(e) => setHost((e.target as HTMLInputElement).value.replace(/[^a-z0-9-]/g, ''))}/>
-              <span class="mono" style="font-size: 12px; color: var(--text-3);">.local</span>
-              <button class="btn btn-sm" onClick={saveHost}>Save</button>
-            </div>
+      <div class="card">
+        <div class="card-head"><span class="smallcaps">Hostname</span></div>
+        <div class="card-body">
+          <span class="field-label">mDNS name</span>
+          <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+            <input class="input mono" value={host}
+              onInput={(e) => setHost((e.target as HTMLInputElement).value.replace(/[^a-z0-9-]/g, ''))}
+              style="flex: 1 1 160px; min-width: 0;"/>
+            <span class="mono" style="font-size: 12px; color: var(--text-3);">.local</span>
+            <button class="btn btn-sm" onClick={saveHost}>Save</button>
           </div>
-        </div>
-
-        <div class="card">
-          <div class="card-head"><span class="smallcaps">AP behaviour</span></div>
-          <div class="card-body" style="display: flex; flex-direction: column; gap: 8px;">
-            {[
-              { id: 'auto', name: 'Auto', desc: 'AP off when STA connected' },
-              { id: 'always', name: 'Always on', desc: 'AP up at all times — local fallback' },
-              { id: 'sta_only', name: 'STA only', desc: 'AP off, ESP-NOW uses STA channel' },
-            ].map(m => {
-              const on = apMode === m.id;
-              return (
-                <button onClick={() => saveApMode(m.id)} style={`text-align: left; padding: 10px 12px; border-radius: 8px; background: ${on ? 'rgba(255,122,61,0.08)' : 'var(--bg-1)'}; border: ${on ? '1px solid rgba(255,122,61,0.55)' : '1px solid var(--line)'}; cursor: pointer; color: inherit;`}>
-                  <div style="font-size: 13px; font-weight: 500;">{m.name}</div>
-                  <div style="font-size: 11px; color: var(--text-3);">{m.desc}</div>
-                </button>
-              );
-            })}
+          <div style="font-size: 11px; color: var(--text-3); margin-top: 8px; line-height: 1.5;">
+            The Wi-Fi access point comes up automatically while the device isn't connected to your home network, and shuts down a few seconds after a successful join.
           </div>
         </div>
       </div>
+
+      {joinModal && <JoinModal state={joinModal} onClose={dismissJoinModal} onRetry={(ssid) => { setJoinModal(null); setJoinSsid(ssid); }}/>}
     </>
+  );
+}
+
+function Spinner({ size = 24 }: { size?: number }) {
+  return (
+    <div style={`width: ${size}px; height: ${size}px; border: 2.5px solid var(--line); border-top-color: var(--acc-orange); border-radius: 50%; animation: spinner 0.8s linear infinite; flex-shrink: 0;`}/>
+  );
+}
+
+/* Copy `text` to the clipboard. Modern Clipboard API requires a secure
+ * context (HTTPS / localhost); since we're served over HTTP from a LAN
+ * IP, we fall back to the legacy execCommand path on insecure origins.
+ * Returns true on success. */
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* fall through */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+function CopyableUrl({ label, url }: { label: string; url: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    const ok = await copyToClipboard(url);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+  return (
+    <div style="display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px;">
+      <div style="flex: 1; min-width: 0;">
+        <div style="font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px;">{label}</div>
+        <a href={url} target="_blank" rel="noopener" class="mono" style="font-size: 13px; color: var(--text-0); text-decoration: none; word-break: break-all;">{url}</a>
+      </div>
+      <button class="btn btn-sm" onClick={copy} style="flex-shrink: 0;">
+        {copied ? <><Icon name="check" size={12}/> Copied</> : 'Copy'}
+      </button>
+    </div>
+  );
+}
+
+function JoinModal({ state, onClose, onRetry }: {
+  state: JoinModalState;
+  onClose: () => void;
+  onRetry: (ssid: string) => void;
+}) {
+  return (
+    <div style="position: fixed; inset: 0; background: rgba(0,0,0,0.65); backdrop-filter: blur(2px); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 12px;"
+         onClick={(e) => { if (e.target === e.currentTarget && state.phase !== 'connecting') onClose(); }}>
+      <div class="card" style="max-width: 480px; width: 100%; padding: 20px; max-height: 90vh; overflow-y: auto; box-sizing: border-box;">
+        {state.phase === 'connecting' && (
+          <>
+            <div class="smallcaps" style="margin-bottom: 12px;">Connecting to "{state.ssid}"</div>
+            <div style="display: flex; align-items: center; gap: 16px;">
+              <Spinner size={28}/>
+              <div style="font-size: 13px; color: var(--text-2); line-height: 1.5;">
+                The device is joining your home Wi-Fi.<br/>
+                This usually takes 5–15 seconds.
+              </div>
+            </div>
+            <div style="font-size: 11px; color: var(--text-3); margin-top: 14px; line-height: 1.5;">
+              Keep your phone connected to the AmbiSense access point until you see the success message.
+            </div>
+            <div style="display: flex; justify-content: flex-end; margin-top: 18px;">
+              <button class="btn" onClick={onClose}>Cancel</button>
+            </div>
+          </>
+        )}
+        {state.phase === 'success' && (
+          <>
+            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 14px;">
+              <span class="dot dot-ok" style="width: 10px; height: 10px;"/>
+              <span style="font-size: 16px; font-weight: 600;">Connected!</span>
+            </div>
+            <div style="font-size: 13px; color: var(--text-2); margin-bottom: 14px; line-height: 1.55;">
+              Your AmbiSense joined <b>"{state.ssid}"</b>. Reconnect your phone to your home Wi-Fi, then open one of these addresses:
+            </div>
+            <CopyableUrl label="mDNS hostname" url={`http://${state.hostname}.local/`}/>
+            <CopyableUrl label="IP address" url={`http://${state.ip}/`}/>
+            <div style="font-size: 11px; color: var(--text-3); margin-top: 12px; line-height: 1.55;">
+              The mDNS hostname is friendlier but doesn't work on every router; use the IP if .local doesn't resolve.<br/>
+              The AmbiSense access point will turn off automatically in about 30 seconds.
+            </div>
+            <div style="display: flex; justify-content: flex-end; margin-top: 18px;">
+              <button class="btn btn-primary" onClick={onClose}>Done</button>
+            </div>
+          </>
+        )}
+        {state.phase === 'failed' && (
+          <>
+            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+              <Icon name="warn" size={18} style={{ color: 'var(--err)' }}/>
+              <span style="font-size: 16px; font-weight: 600;">Couldn't connect</span>
+            </div>
+            <div style="font-size: 13px; color: var(--text-2); margin-bottom: 12px; line-height: 1.55;">{state.error}</div>
+            <div style="font-size: 11px; color: var(--text-3); margin-bottom: 18px; line-height: 1.55;">
+              The device returned to AP mode. Double-check the password and SSID, then try again — your phone is still on the AmbiSense access point.
+            </div>
+            <div style="display: flex; gap: 8px; justify-content: flex-end;">
+              <button class="btn" onClick={onClose}>Close</button>
+              <button class="btn btn-primary" onClick={() => onRetry(state.ssid)}>Try again</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 

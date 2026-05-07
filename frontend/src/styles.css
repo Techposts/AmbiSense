@@ -212,6 +212,7 @@ input, select, textarea { font: inherit; color: inherit; }
 .toast.err { border-color: rgba(255,84,112,.4); color: var(--err); }
 
 @keyframes fade-up { from { opacity: 0; transform: translate(-50%, 6px); } to { opacity: 1; transform: translate(-50%, 0); } }
+@keyframes spinner { to { transform: rotate(360deg); } }
 @keyframes pulse-acc { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
 @keyframes logo-pulse {
   0%   { r: 4;  opacity: 0.9; stroke-width: 1.4; }

@@ -13,6 +13,7 @@
 #include "esp_netif.h"
 #include "esp_mac.h"
 #include "esp_random.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -26,6 +27,15 @@ static const char *TAG = "netmgr";
 
 #define STA_RETRY_MAX     3
 #define STA_RETRY_BACKOFF_MS  3000
+/* Grace period after STA gets an IP before AUTO policy tears the AP
+ * interface down. Lets a phone that's still on the captive portal
+ * finish polling /api/wifi and read the device's new STA IP / hostname
+ * before the AP disappears underneath it. The frontend's polling
+ * cadence is 1.5 s so the success modal flips within ~3 s of GOT_IP;
+ * 8 s grace gives the user 5+ s to read the URL — and the modal
+ * persists in the browser even after the AP drops, so they can
+ * continue to copy the URL without a live network. */
+#define AP_TEARDOWN_GRACE_US (8ULL * 1000ULL * 1000ULL)
 
 static struct {
     netmgr_state_t state;
@@ -42,6 +52,12 @@ static struct {
     bool sta_configured;   /* true if NVS has stored creds */
     netmgr_ap_mode_t ap_mode;
     TaskHandle_t dns_task;
+    /* Deferred work — both timers run on the esp_timer task, NOT the
+     * Wi-Fi event loop, so they can safely call esp_wifi_connect() and
+     * esp_wifi_set_mode() which would deadlock if called from inside an
+     * event handler. */
+    esp_timer_handle_t sta_retry_timer;   /* fires STA_RETRY_BACKOFF_MS after disconnect */
+    esp_timer_handle_t ap_teardown_timer; /* fires AP_TEARDOWN_GRACE_US after STA gets IP */
 } s_net;
 
 /* Decide whether the AP interface should be on right now.
@@ -201,21 +217,51 @@ static void stop_captive_dns_now(void) {
     s_net.dns_running = false;
 }
 
+/* esp_timer callbacks — these run on the esp_timer task, OUTSIDE the
+ * Wi-Fi event loop, so they may safely call esp_wifi_* functions. */
+static void sta_retry_timer_cb(void *arg) {
+    (void)arg;
+    if (s_net.state == NETMGR_STATE_STA_CONNECTING) {
+        ESP_LOGI(TAG, "STA retry timer firing");
+        esp_wifi_connect();
+    }
+}
+
+static void ap_teardown_timer_cb(void *arg) {
+    (void)arg;
+    /* Re-check policy at fire time — STA might have dropped during the
+     * grace period, in which case we leave the AP up. */
+    if (s_net.state == NETMGR_STATE_STA_CONNECTED && !ap_should_be_on()) {
+        ESP_LOGI(TAG, "AP teardown grace period elapsed; powering AP down per policy");
+        apply_ap_state(false);
+    }
+}
+
 static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         bool was_connected = (s_net.state == NETMGR_STATE_STA_CONNECTED);
         s_net.state = NETMGR_STATE_STA_CONNECTING;
+        /* Cancel any pending AP teardown — STA isn't connected right now. */
+        if (s_net.ap_teardown_timer) esp_timer_stop(s_net.ap_teardown_timer);
         if (was_connected) {
             ESP_LOGW(TAG, "STA dropped after being connected — bringing AP back up while we retry");
             apply_ap_state(ap_should_be_on());
         }
         if (s_net.sta_retry < STA_RETRY_MAX) {
             s_net.sta_retry++;
-            ESP_LOGW(TAG, "STA disconnected; retry %d/%d", s_net.sta_retry, STA_RETRY_MAX);
-            vTaskDelay(pdMS_TO_TICKS(STA_RETRY_BACKOFF_MS));
-            esp_wifi_connect();
+            ESP_LOGW(TAG, "STA disconnected; retry %d/%d in %d ms",
+                     s_net.sta_retry, STA_RETRY_MAX, STA_RETRY_BACKOFF_MS);
+            /* Schedule the retry on the esp_timer task — calling
+             * vTaskDelay() inside the Wi-Fi event loop blocks every
+             * subsequent Wi-Fi event for the duration, which under
+             * reconnect storms causes the stack to fall behind. */
+            if (s_net.sta_retry_timer) {
+                esp_timer_stop(s_net.sta_retry_timer);
+                esp_timer_start_once(s_net.sta_retry_timer,
+                                     (uint64_t)STA_RETRY_BACKOFF_MS * 1000ULL);
+            }
         } else {
             ESP_LOGW(TAG, "STA failed after %d retries; AP fallback active", STA_RETRY_MAX);
             xEventGroupSetBits(s_net.evt, EVT_FAIL);
@@ -227,18 +273,27 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
         ESP_LOGI(TAG, "STA got IP: " IPSTR, IP2STR(&e->ip_info.ip));
         s_net.sta_retry = 0;
         s_net.state = NETMGR_STATE_STA_CONNECTED;
+        if (s_net.sta_retry_timer) esp_timer_stop(s_net.sta_retry_timer);
         xEventGroupSetBits(s_net.evt, EVT_GOT_IP);
-        /* AUTO/STA_ONLY: power down the AP now that STA is up. ALWAYS: keep it. */
-        apply_ap_state(ap_should_be_on());
+        /* AUTO/STA_ONLY: AP should come down. But don't tear it down
+         * immediately — a phone that's still on the captive portal
+         * needs a polling window to read /api/wifi and learn the new
+         * STA IP / hostname. Schedule the teardown 30 s out. */
+        if (s_net.ap_active && !ap_should_be_on() && s_net.ap_teardown_timer) {
+            esp_timer_stop(s_net.ap_teardown_timer);
+            esp_timer_start_once(s_net.ap_teardown_timer, AP_TEARDOWN_GRACE_US);
+            ESP_LOGI(TAG, "AP teardown scheduled in 8 s (captive-portal grace window)");
+        }
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
         wifi_event_ap_staconnected_t *e = (wifi_event_ap_staconnected_t *)data;
         ESP_LOGI(TAG, "AP client joined: " MACSTR, MAC2STR(e->mac));
     }
 }
 
-/* Configure both AP and STA interfaces. The AP stays up for the
- * entire device lifetime — many installs have no router at all, and
- * peer-mesh devices need a stable channel to find each other. */
+/* Configure the AP interface. AP visibility is governed by the
+ * netmgr_ap_mode_t policy (AUTO / ALWAYS / STA_ONLY). For first-setup
+ * the AP starts open so the captive portal pops the setup page; the
+ * user can lock it down via /api/wifi { ap_password: "..." }. */
 static esp_err_t configure_ap(void) {
     char ap_ssid[32];
     uint8_t mac[6];
@@ -249,8 +304,7 @@ static esp_err_t configure_ap(void) {
     char ap_pass[64] = {0};
     settings_get_str("wifi", "ap_pass", ap_pass, sizeof(ap_pass));
 
-    /* Channel: prefer NVS pin (so peers can be co-channeled even off-router);
-     * default 6. PR #4's mesh uses this same channel. */
+    /* AP channel: NVS override, otherwise default 6. */
     uint8_t channel = 6;
     uint8_t saved_ch = 0;
     if (settings_get_u8("wifi", "ap_ch", &saved_ch) == ESP_OK && saved_ch >= 1 && saved_ch <= 13) {
@@ -261,7 +315,7 @@ static esp_err_t configure_ap(void) {
     snprintf((char *)cfg.ap.ssid, sizeof(cfg.ap.ssid), "%s", ap_ssid);
     cfg.ap.ssid_len = strlen(ap_ssid);
     cfg.ap.channel = channel;
-    cfg.ap.max_connection = 6;  /* up to 5 mesh peers + 1 phone */
+    cfg.ap.max_connection = 4;  /* a phone or two; we don't need more */
     if (ap_pass[0] && strlen(ap_pass) >= 8) {
         snprintf((char *)cfg.ap.password, sizeof(cfg.ap.password), "%s", ap_pass);
         cfg.ap.authmode = WIFI_AUTH_WPA2_PSK;
@@ -281,7 +335,15 @@ static esp_err_t configure_sta(const char *ssid, const char *pass) {
     snprintf((char *)cfg.sta.ssid, sizeof(cfg.sta.ssid), "%s", ssid);
     if (pass && pass[0]) snprintf((char *)cfg.sta.password, sizeof(cfg.sta.password), "%s", pass);
     cfg.sta.threshold.authmode = WIFI_AUTH_OPEN;
-    cfg.sta.scan_method = WIFI_FAST_SCAN;
+    /* WIFI_FAST_SCAN relies on a cached BSSID/channel from a previous
+     * successful connect. On a fresh device or after credentials change
+     * the cache is empty and FAST_SCAN can give up before finding the
+     * SSID — manifests to users as "first attempt fails, second
+     * succeeds". ALL_CHANNEL_SCAN takes ~3 s extra but is reliable on
+     * the very first try, which is the only attempt that matters during
+     * onboarding. */
+    cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    cfg.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
     cfg.sta.pmf_cfg.capable = true;
     return esp_wifi_set_config(WIFI_IF_STA, &cfg);
 }
@@ -307,6 +369,20 @@ esp_err_t netmgr_init(void) {
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &on_wifi_event, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &on_wifi_event, NULL));
+
+    /* Create the deferred-work timers. They get armed/disarmed from the
+     * Wi-Fi event handler; their callbacks run on the esp_timer task,
+     * keeping the event loop unblocked. */
+    const esp_timer_create_args_t retry_args = {
+        .callback = sta_retry_timer_cb, .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK, .name = "sta_retry",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&retry_args, &s_net.sta_retry_timer));
+    const esp_timer_create_args_t teardown_args = {
+        .callback = ap_teardown_timer_cb, .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK, .name = "ap_teardown",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&teardown_args, &s_net.ap_teardown_timer));
 
     /* Read AP-mode policy from NVS; default AUTO (AP only when STA is
      * down, or always when no STA configured). */
