@@ -33,6 +33,15 @@ typedef struct {
     int8_t  rssi;
     uint32_t free_heap;
     uint32_t uptime_s;
+    /* Presence — populated by the ws_broadcast_task on each tick from
+     * presence_get(); main.c's telemetry_pump_task doesn't need to set
+     * these. They're here so the WS payload picks them up coherently
+     * with the rest of the snapshot under one mutex. */
+    bool     pres_occupied;
+    uint8_t  pres_count;
+    bool     pres_stationary;
+    int16_t  pres_nearest_cm;  /* -1 if vacant */
+    uint32_t pres_ms_since_seen;
 } webui_live_t;
 
 void webui_publish_live(const webui_live_t *snap);

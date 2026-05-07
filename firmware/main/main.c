@@ -35,6 +35,7 @@
 #include "radar.h"
 #include "motion.h"
 #include "led_engine.h"
+#include "presence.h"
 #include "button.h"
 
 static const char *TAG = "ambisense";
@@ -184,6 +185,11 @@ void app_main(void) {
     };
     if (radar_init(&rcfg) != ESP_OK) ESP_LOGW(TAG, "radar_init failed (continuing)");
     motion_init();
+    /* Presence detection is independent of motion + led_engine — it reads
+     * the same radar stream via radar_peek(), derives occupancy, and
+     * publishes for webui + (future) MQTT. Single-sensor architecture
+     * means one presence_init per device — no peer aggregation. */
+    if (presence_init() != ESP_OK) ESP_LOGW(TAG, "presence_init failed (continuing)");
     if (led_engine_init(runtime.led_pin) != ESP_OK) {
         ESP_LOGE(TAG, "led_engine_init on GPIO %u failed", runtime.led_pin);
     }

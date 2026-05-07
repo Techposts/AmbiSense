@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 
 #include "settings.h"
 
@@ -21,12 +22,27 @@ typedef struct {
 } radar_driver_t;
 
 /* Forward decls — drivers live in radar_<kind>.c */
+extern size_t radar_ld2410_parse(const uint8_t *buf, size_t len, radar_frame_t *out);
 extern size_t radar_ld2450_parse(const uint8_t *buf, size_t len, radar_frame_t *out);
 extern size_t radar_sim_parse   (const uint8_t *buf, size_t len, radar_frame_t *out);
 
+/* v6.2 sensor matrix:
+ *   ld2450  — best for stairwell follow-me (x/y target tracking) AND
+ *             general presence (auto-falls-back to count-only when
+ *             you don't care about position). Kit default.
+ *   ld2410c — best for static presence (couch / desk / breathing
+ *             detection). Cheaper. Single-target distance-only.
+ *   ld2410  — same protocol family as 2410c; legacy support for
+ *             v5/v6.0 hardware that already has 2410-class units in
+ *             the field.
+ *   sim     — synthetic distance trace for desk testing without a
+ *             radar wired up.
+ */
 static const radar_driver_t k_drivers[] = {
-    { "ld2450", radar_ld2450_parse },
-    { "sim",    radar_sim_parse    },
+    { "ld2450",  radar_ld2450_parse },
+    { "ld2410c", radar_ld2410_parse },  /* same protocol family */
+    { "ld2410",  radar_ld2410_parse },
+    { "sim",     radar_sim_parse    },
 };
 
 static struct {
@@ -34,6 +50,13 @@ static struct {
     QueueHandle_t q;
     radar_config_t cfg;
     bool inited;
+    /* Latest parsed frame, fan-out copy. radar_read() still drives the
+     * 1-slot queue (motion drains it once per frame); radar_peek() reads
+     * this snapshot under lock so multiple peek consumers (presence,
+     * diagnostics, future) can poll without competing with motion. */
+    radar_frame_t latest;
+    bool          latest_valid;
+    SemaphoreHandle_t latest_lock;
     /* Diagnostics — let users debug "distance always 0" by seeing whether
      * UART bytes are arriving and frames are parsing. */
     uint32_t      diag_bytes;
@@ -106,6 +129,11 @@ static void radar_task(void *arg) {
                 s_radar.diag_frames++;
                 s_radar.diag_last_frame_us = frame.ts_us;
             }
+            /* Fan-out snapshot for radar_peek() consumers. */
+            xSemaphoreTake(s_radar.latest_lock, portMAX_DELAY);
+            s_radar.latest = frame;
+            s_radar.latest_valid = true;
+            xSemaphoreGive(s_radar.latest_lock);
             if (consumed < held) memmove(rx, rx + consumed, held - consumed);
             held -= consumed;
         }
@@ -130,6 +158,7 @@ esp_err_t radar_init(const radar_config_t *cfg) {
 
     s_radar.cfg = *cfg;
     s_radar.q = xQueueCreate(1, sizeof(radar_frame_t));
+    s_radar.latest_lock = xSemaphoreCreateMutex();
 
     /* The simulator driver doesn't need UART at all. */
     if (strcmp(s_radar.drv->id, "sim") != 0) {
@@ -155,5 +184,14 @@ esp_err_t radar_init(const radar_config_t *cfg) {
 esp_err_t radar_read(radar_frame_t *out, TickType_t timeout) {
     if (!s_radar.inited) return ESP_ERR_INVALID_STATE;
     if (xQueueReceive(s_radar.q, out, timeout) != pdTRUE) return ESP_ERR_TIMEOUT;
+    return ESP_OK;
+}
+
+esp_err_t radar_peek(radar_frame_t *out) {
+    if (!s_radar.inited || !out) return ESP_ERR_INVALID_STATE;
+    if (!s_radar.latest_valid) return ESP_ERR_NOT_FOUND;
+    xSemaphoreTake(s_radar.latest_lock, portMAX_DELAY);
+    *out = s_radar.latest;
+    xSemaphoreGive(s_radar.latest_lock);
     return ESP_OK;
 }

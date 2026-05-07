@@ -6,15 +6,16 @@ import { useEffect, useState } from 'preact/hooks';
 import { getJSON, liveSocket } from './api';
 import { Toast, useToaster } from './components';
 import { Icon, LogoMark, Wordmark } from './atoms';
-import { ScreenLive, ScreenLeds, ScreenMotion, ScreenHardware, ScreenNetwork, ScreenSystem } from './screens';
+import { ScreenLive, ScreenLeds, ScreenMotion, ScreenPresence, ScreenHardware, ScreenNetwork, ScreenSystem } from './screens';
 import './styles.css';
 
-type Tab = 'live'|'leds'|'motion'|'hardware'|'network'|'system';
+type Tab = 'live'|'leds'|'motion'|'presence'|'hardware'|'network'|'system';
 
 const TABS: { id: Tab; name: string; icon: string }[] = [
   { id: 'live',     name: 'Live',     icon: 'dashboard' },
   { id: 'leds',     name: 'LEDs',     icon: 'led' },
   { id: 'motion',   name: 'Motion',   icon: 'motion' },
+  { id: 'presence', name: 'Presence', icon: 'person' },
   { id: 'hardware', name: 'Hardware', icon: 'chip' },
   { id: 'network',  name: 'Network',  icon: 'wifi' },
   { id: 'system',   name: 'System',   icon: 'settings' },
@@ -24,7 +25,7 @@ function App() {
   const [tab, setTab] = useState<Tab>(localStorage.getItem('ambitab') as Tab || 'live');
   const [version, setVersion] = useState<any>({});
   const [settings, setSettings] = useState<any>({});
-  const [live, setLive] = useState<any>({ distance: 0, raw: 0, direction: 0, rssi: 0, heap: 0, uptime: 0 });
+  const [live, setLive] = useState<any>({ distance: 0, raw: 0, direction: 0, rssi: 0, heap: 0, uptime: 0, occupied: false, count: 0, stationary: false, nearest_cm: -1, seconds_since_seen: 0 });
   const [theme, setTheme] = useState<'dark'|'light'>(localStorage.getItem('ambitheme') as any || 'dark');
   const [wsConnected, setWsConnected] = useState(false);
   const t = useToaster();
@@ -47,7 +48,7 @@ function App() {
   useEffect(() => { localStorage.setItem('ambitab', tab); }, [tab]);
 
   const state = { live, settings, version, toast: t.toast, setToast: t.set, reload };
-  const switcher: Record<Tab, any> = { live: ScreenLive, leds: ScreenLeds, motion: ScreenMotion, hardware: ScreenHardware, network: ScreenNetwork, system: ScreenSystem };
+  const switcher: Record<Tab, any> = { live: ScreenLive, leds: ScreenLeds, motion: ScreenMotion, presence: ScreenPresence, hardware: ScreenHardware, network: ScreenNetwork, system: ScreenSystem };
   const Screen = switcher[tab];
   const tabName = TABS.find(x => x.id === tab)?.name || '';
   const dist = Math.round(live.distance || 0);

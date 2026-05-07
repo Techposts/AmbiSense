@@ -7,7 +7,16 @@ import { LedPreview, LED_MODE_NAMES } from './led_preview';
 import { Icon, Sparkline, fmtUptime, NumberAndSlider, DualHandleRange, LineChart, hsv2rgb, rgb2hex, hex2rgb } from './atoms';
 import { getJSON, postJSON, postBinary } from './api';
 
-interface Live { distance: number; direction: number; rssi: number; heap: number; uptime: number; }
+interface Live {
+  distance: number; direction: number; rssi: number; heap: number; uptime: number;
+  /* Presence — populated by /api/live since v6.2.0-alpha.1. Optional
+   * for back-compat with older firmware that doesn't emit them. */
+  occupied?: boolean;
+  count?: number;
+  stationary?: boolean;
+  nearest_cm?: number;
+  seconds_since_seen?: number;
+}
 export interface AppState {
   live: Live;
   settings: any;
@@ -120,13 +129,20 @@ export function ScreenLive({ live, version, settings, setToast }: AppState) {
                 <div style="display: flex; align-items: baseline; gap: 8px; margin-top: 8px;">
                   <span class="mono dist-big">{dist}</span><span style="color: var(--text-2); font-size: 16px;">cm</span>
                 </div>
+                {/* Each chip gets a min-width sized for its widest possible
+                  * inner text + justify-content: center. Without this, the
+                  * direction chip flips between "still" / "closer →" / "away →"
+                  * and the in-window chip flips between "in window" / "outside",
+                  * which on each transition reflows this whole flex row and
+                  * — because .distance-row's right column has flex: 1 — tugs
+                  * the sparkline horizontally. Fixed widths kill the wobble. */}
                 <div style="display: flex; gap: 10px; margin-top: 14px; align-items: center; flex-wrap: wrap;">
-                  <span class="chip" style={`color: ${inWindow ? 'var(--ok)' : 'var(--text-2)'};`}>
+                  <span class="chip" style={`color: ${inWindow ? 'var(--ok)' : 'var(--text-2)'}; min-width: 92px; justify-content: center;`}>
                     <span class={`dot ${inWindow ? 'dot-ok' : 'dot-off'}`}/>{inWindow ? 'in window' : 'outside'}
                   </span>
-                  <span class="chip">min {minD}</span>
-                  <span class="chip">max {maxD}</span>
-                  <span class="chip">{live.direction === 0 ? 'still' : live.direction < 0 ? 'closer →' : 'away →'}</span>
+                  <span class="chip" style="min-width: 60px; justify-content: center;">min {minD}</span>
+                  <span class="chip" style="min-width: 60px; justify-content: center;">max {maxD}</span>
+                  <span class="chip" style="min-width: 78px; justify-content: center;">{live.direction === 0 ? 'still' : live.direction < 0 ? 'closer →' : 'away →'}</span>
                 </div>
               </div>
               <div class="dist-spark">
@@ -511,7 +527,135 @@ export function ScreenMotion({ settings, live, reload, setToast }: AppState) {
 }
 
 /* ================================================================= */
-/*                          D. HARDWARE                              */
+/*                          D. PRESENCE                              */
+/* ================================================================= */
+export function ScreenPresence({ live, settings, setToast, reload }: AppState) {
+  const occupied = !!live.occupied;
+  const count = live.count ?? 0;
+  const stationary = !!live.stationary;
+  const nearest = live.nearest_cm ?? -1;
+  const sinceSeen = live.seconds_since_seen ?? 0;
+
+  /* Vacancy timeout — exposed via /api/settings since the firmware
+   * persists it in the `presence` NVS namespace. Local state is the
+   * draft value; we debounce-save (300 ms) like the LED/motion sliders. */
+  const vacancy = settings.vacancy_secs ?? 60;
+  const [vacDraft, setVacDraft] = useState<number>(vacancy);
+  /* Sync draft to settings when settings refresh from server. */
+  useEffect(() => { setVacDraft(settings.vacancy_secs ?? 60); }, [settings.vacancy_secs]);
+  const save = useDebouncedSave(reload, setToast, 300);
+
+  const ip = (live as any).ip;
+  const haPrefix = `homeassistant`;
+  const fmtSinceSeen = (s: number) => {
+    if (s === 0 || sinceSeen === undefined) return '—';
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.floor(s/60)}m ${s%60}s`;
+    return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+  };
+
+  return (
+    <>
+      <PageHead title="Presence" sub="Room occupancy from radar — for stairs, hallways, or any space where you want to know if a human is present"/>
+
+      {/* Big status card — occupied or vacant, eye-catching. */}
+      <div class="card" style={`padding: 22px; margin-bottom: 14px; border-color: ${occupied ? 'rgba(74,222,128,0.5)' : 'var(--line)'}; background: ${occupied ? 'linear-gradient(135deg, rgba(74,222,128,0.07), rgba(74,222,128,0.02))' : 'transparent'};`}>
+        <div style="display: flex; align-items: center; gap: 18px; flex-wrap: wrap;">
+          <div style={`width: 56px; height: 56px; border-radius: 16px; display: flex; align-items: center; justify-content: center; background: ${occupied ? 'var(--ok)' : 'var(--bg-3)'}; color: ${occupied ? '#0a2014' : 'var(--text-3)'}; flex-shrink: 0;`}>
+            <Icon name="person" size={28} stroke={2}/>
+          </div>
+          <div style="flex: 1; min-width: 0;">
+            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <span style="font-size: 22px; font-weight: 600; letter-spacing: -0.02em;">{occupied ? 'Occupied' : 'Vacant'}</span>
+              {occupied && stationary && <span class="chip" style="color: var(--info);"><span class="dot dot-ok"/> stationary</span>}
+              {occupied && !stationary && <span class="chip"><span class="dot dot-ok"/> moving</span>}
+            </div>
+            <div style="font-size: 13px; color: var(--text-2); margin-top: 4px;">
+              {occupied
+                ? `${count} target${count === 1 ? '' : 's'} detected${nearest >= 0 ? ` · nearest ${nearest} cm away` : ''}`
+                : `Last detection ${fmtSinceSeen(sinceSeen)} ago`}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Tile row — count, nearest, vacancy state. */}
+      <div class="dash-grid" style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px;">
+        <StatTilePresence label="Targets" value={`${count}`} sub={count === 1 ? 'person' : 'people'} accent={occupied}/>
+        <StatTilePresence label="Nearest" value={occupied && nearest >= 0 ? `${nearest}` : '—'} sub={occupied && nearest >= 0 ? 'cm' : 'no target'} accent={occupied}/>
+        <StatTilePresence label="Last seen" value={fmtSinceSeen(sinceSeen)} sub={occupied ? 'now' : 'ago'} accent={false}/>
+      </div>
+
+      {/* Vacancy timeout config */}
+      <div class="card" style="margin-bottom: 14px;">
+        <div class="card-head"><span class="smallcaps">Vacancy timeout</span></div>
+        <div class="card-body">
+          <NumberAndSlider
+            label="Hold occupied for N seconds after last detection"
+            value={vacDraft}
+            onChange={(v) => { setVacDraft(v); save({ vacancy_secs: v }); }}
+            min={5} max={600} step={1} suffix="seconds"/>
+          <div style="font-size: 11px; color: var(--text-3); margin-top: 10px; line-height: 1.5;">
+            How long to keep reporting <b>Occupied</b> after the radar last detected a target. Higher values mask brief drop-outs (e.g. someone briefly steps behind a wall) but slow vacancy detection.<br/>
+            Recommended: <b>30–60 s</b> for hallways, <b>120–300 s</b> for couches / desks where the user sits still for long stretches and you want LD2410C-class robustness even from an LD2450 sensor.
+          </div>
+        </div>
+      </div>
+
+      {/* Sensor recommendation card */}
+      <div class="card" style="margin-bottom: 14px;">
+        <div class="card-head"><span class="smallcaps">Choosing the right radar</span></div>
+        <div class="card-body" style="font-size: 13px; color: var(--text-2); line-height: 1.6;">
+          <div style="margin-bottom: 8px;"><b>LD2450</b> (kit default) — best when you also want the LED follow-me feature, or for installs where targets are usually moving. Detects up to 3 people; provides x/y/speed.</div>
+          <div style="margin-bottom: 8px;"><b>LD2410C</b> — best for static-presence installs where someone sits still for long periods (couch, desk, bed). Native micro-motion detection picks up breathing-level movement that an LD2450 might drop after ~30–60 s of stillness.</div>
+          <div style="font-size: 11px; color: var(--text-3); margin-top: 10px;">Switch in <b>Hardware → Radar kind</b> · reboot to apply.</div>
+        </div>
+      </div>
+
+      {/* Home Assistant integration hint */}
+      <div class="card">
+        <div class="card-head"><span class="smallcaps">Home Assistant</span><span class="chip">REST</span></div>
+        <div class="card-body" style="font-size: 13px; color: var(--text-2); line-height: 1.6;">
+          MQTT auto-discovery is on the v6.2 roadmap. Today, you can wire HA's <b>RESTful sensor</b> at <code class="mono">/api/presence</code>:
+          <pre style="background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px; padding: 12px; font-size: 11px; overflow-x: auto; margin-top: 10px;">
+{`# configuration.yaml
+binary_sensor:
+  - platform: rest
+    resource: http://${(settings.hostname || 'ambisense')}.local/api/presence
+    name: AmbiSense Presence
+    value_template: "{{ value_json.occupied }}"
+    payload_on: "true"
+    payload_off: "false"
+    scan_interval: 5
+sensor:
+  - platform: rest
+    resource: http://${(settings.hostname || 'ambisense')}.local/api/presence
+    name: AmbiSense Distance
+    value_template: "{{ value_json.nearest_cm }}"
+    unit_of_measurement: cm
+    scan_interval: 5`}
+          </pre>
+          <div style="font-size: 11px; color: var(--text-3); margin-top: 10px;">
+            <a href="https://github.com/Techposts/AmbiSense/wiki/FAQ" target="_blank" rel="noopener" style="color: var(--info);">More HA integration recipes →</a>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function StatTilePresence({ label, value, sub, accent }: { label: string; value: string; sub: string; accent: boolean }) {
+  return (
+    <div class="card" style="padding: 14px;">
+      <div class="smallcaps">{label}</div>
+      <div class="mono" style={`font-size: 22px; font-weight: 500; margin-top: 6px; letter-spacing: -0.02em; color: ${accent ? 'var(--ok)' : 'var(--text-0)'};`}>{value}</div>
+      <div style="font-size: 11px; color: var(--text-3); margin-top: 2px;">{sub}</div>
+    </div>
+  );
+}
+
+/* ================================================================= */
+/*                          E. HARDWARE                              */
 /* ================================================================= */
 export function ScreenHardware({ setToast, reload }: AppState) {
   const [profiles, setProfiles] = useState<any>(null);

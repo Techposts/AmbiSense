@@ -27,6 +27,7 @@
 #include "led_engine.h"
 #include "radar.h"
 #include "motion.h"
+#include "presence.h"
 
 static const char *TAG = "webui";
 
@@ -612,12 +613,16 @@ static esp_err_t handle_board_post(httpd_req_t *req) {
 static esp_err_t handle_radar_kinds(httpd_req_t *req) {
     cJSON *r = cJSON_CreateObject();
     cJSON *arr = cJSON_AddArrayToObject(r, "kinds");
-    /* v6.x ships LD2450 only — its (x, y, speed) target stream covers
-     * straight / L-shape / U-shape geometries from a single sensor. The
-     * `sim` driver is retained for desk testing without a radar attached. */
+    /* v6.2 sensor matrix. LD2450 is the kit default — covers stairwell
+     * follow-me AND moving-target presence. LD2410C is recommended for
+     * presence-only installs (couch/desk) where static detection
+     * matters more than (x, y). LD2410 is kept for legacy v5/v6.0
+     * hardware compat. */
     static const struct { const char *id; const char *display; bool xy; const char *note; } K[] = {
-        { "ld2450", "HiLink LD2450", true, "up to 3 targets, x/y/speed (24 GHz)" },
-        { "sim",    "Simulator",     true, "synthetic distance traces for testing" },
+        { "ld2450",  "HiLink LD2450",  true,  "Stairwell follow-me + presence (recommended). Up to 3 targets, x/y/speed (24 GHz)." },
+        { "ld2410c", "HiLink LD2410C", false, "Presence-only: best for stationary detection (couch, desk). Single-target distance + state (24 GHz)." },
+        { "ld2410",  "HiLink LD2410(B)", false, "Legacy compat with v5/v6.0 hardware. Same protocol as LD2410C; pick LD2410C for new installs." },
+        { "sim",     "Simulator",      true,  "Synthetic distance traces for desk testing without a radar." },
     };
     for (size_t i = 0; i < sizeof(K)/sizeof(K[0]); ++i) {
         cJSON *o = cJSON_CreateObject();
@@ -703,6 +708,10 @@ static esp_err_t handle_settings_get(httpd_req_t *req) {
     add_u32_if(r, "motion", "pg", "p_gain_x1k");
     add_u32_if(r, "motion", "ig", "i_gain_x1k");
 
+    /* Presence vacancy timeout — exposed in /api/settings so the UI can
+     * render and update it via a single batched POST. */
+    cJSON_AddNumberToObject(r, "vacancy_secs", presence_get_vacancy_timeout());
+
     cJSON_AddBoolToObject(r, "auth_enabled", auth_is_enabled());
     return send_json(req, r);
 }
@@ -740,6 +749,9 @@ static const struct setting_map {
     { "predict_x1k",      "motion", "pf",         '4' },
     { "p_gain_x1k",       "motion", "pg",         '4' },
     { "i_gain_x1k",       "motion", "ig",         '4' },
+    /* vacancy_secs is handled out-of-band (see handle_settings_post) so
+     * the in-memory presence state updates immediately. NVS persistence
+     * happens inside presence_set_vacancy_timeout(). */
 };
 
 static esp_err_t handle_settings_post(httpd_req_t *req) {
@@ -767,6 +779,13 @@ static esp_err_t handle_settings_post(httpd_req_t *req) {
                 break;
         }
     }
+    /* vacancy_secs is handled out-of-band so the in-memory value
+     * updates immediately (presence task picks it up next tick) without
+     * waiting for an NVS reload pass. */
+    cJSON *vac = cJSON_GetObjectItem(j, "vacancy_secs");
+    if (vac && cJSON_IsNumber(vac)) {
+        if (presence_set_vacancy_timeout((uint32_t)vac->valueint) == ESP_OK) updated++;
+    }
     cJSON_Delete(j);
     /* Push LED-engine + motion settings live without reboot. Both modules
      * are designed to re-read all NVS keys on reload; expensive but called
@@ -776,6 +795,29 @@ static esp_err_t handle_settings_post(httpd_req_t *req) {
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "ok", true);
     cJSON_AddNumberToObject(r, "updated", updated);
+    return send_json(req, r);
+}
+
+/* ============================================================
+ *  /api/presence — current presence snapshot for room-presence /
+ *  Home Assistant integrations. WS clients get the same data inline
+ *  in /api/live every 50 ms; this REST endpoint is for HA's REST
+ *  sensor and curl debugging.
+ * ============================================================ */
+static esp_err_t handle_presence_get(httpd_req_t *req) {
+    presence_t p;
+    if (presence_get(&p) != ESP_OK) return send_err(req, 503, "presence not initialised");
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject (r, "occupied",       p.occupied);
+    cJSON_AddNumberToObject(r, "target_count",   p.target_count);
+    cJSON_AddBoolToObject (r, "stationary",     p.stationary);
+    cJSON_AddNumberToObject(r, "nearest_cm",     p.nearest_cm);
+    cJSON_AddNumberToObject(r, "vacancy_secs",   p.vacancy_secs);
+    if (p.ms_since_seen == UINT32_MAX) {
+        cJSON_AddNullToObject(r, "seconds_since_seen");
+    } else {
+        cJSON_AddNumberToObject(r, "seconds_since_seen", p.ms_since_seen / 1000);
+    }
     return send_json(req, r);
 }
 
@@ -852,11 +894,32 @@ static void ws_broadcast_task(void *arg) {
         snap.rssi = netmgr_get_rssi();
         xSemaphoreGive(s_web.lock);
 
-        char json[200];
+        /* Pull presence inline so WS clients see distance + occupancy
+         * coherently — important for HA-style consumers that don't want
+         * to merge two timestamps. */
+        presence_t p;
+        if (presence_get(&p) == ESP_OK) {
+            snap.pres_occupied      = p.occupied;
+            snap.pres_count         = p.target_count;
+            snap.pres_stationary    = p.stationary;
+            snap.pres_nearest_cm    = p.nearest_cm;
+            snap.pres_ms_since_seen = p.ms_since_seen;
+        }
+
+        char json[280];
         int n = snprintf(json, sizeof(json),
-            "{\"distance\":%d,\"raw\":%d,\"direction\":%d,\"rssi\":%d,\"heap\":%" PRIu32 ",\"uptime\":%" PRIu32 "}",
+            "{\"distance\":%d,\"raw\":%d,\"direction\":%d,\"rssi\":%d,"
+            "\"heap\":%" PRIu32 ",\"uptime\":%" PRIu32 ","
+            "\"occupied\":%s,\"count\":%u,\"stationary\":%s,"
+            "\"nearest_cm\":%d,\"seconds_since_seen\":%" PRIu32 "}",
             snap.distance_cm, snap.raw_cm, snap.direction, snap.rssi,
-            snap.free_heap, snap.uptime_s);
+            snap.free_heap, snap.uptime_s,
+            snap.pres_occupied ? "true" : "false",
+            (unsigned)snap.pres_count,
+            snap.pres_stationary ? "true" : "false",
+            snap.pres_nearest_cm,
+            snap.pres_ms_since_seen == UINT32_MAX ? UINT32_MAX
+                                                  : snap.pres_ms_since_seen / 1000);
 
         httpd_ws_frame_t f = {
             .final = true, .fragmented = false,
@@ -945,6 +1008,7 @@ static const httpd_uri_t k_routes[] = {
     { "/api/settings",                   HTTP_GET,  handle_settings_get,     NULL },
     { "/api/settings",                   HTTP_POST, handle_settings_post,    NULL },
     { "/api/distance",                   HTTP_GET,  handle_distance,         NULL },
+    { "/api/presence",                   HTTP_GET,  handle_presence_get,     NULL },
     { "/api/ota",                        HTTP_POST, handle_ota,              NULL },
 };
 
