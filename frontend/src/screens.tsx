@@ -1210,9 +1210,9 @@ export function ScreenSystem({ version, setToast }: AppState) {
         <div class="card">
           <div class="card-head"><span class="smallcaps">Firmware</span><span class="chip mono">{version.version || '—'}</span></div>
           <div class="card-body" style="display: flex; flex-direction: column; gap: 12px;">
-            <div style="display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--bg-1); border-radius: 10px;">
+            <div class="fw-head" style="display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--bg-1); border-radius: 10px;">
               <Icon name="cpu" size={18} style={{ color: 'var(--text-2)' }}/>
-              <div style="flex: 1;">
+              <div style="flex: 1; min-width: 0;">
                 <div class="mono" style="font-size: 13px;">{version.version} <span style="color: var(--text-3);">· {version.target}</span></div>
                 <div style="font-size: 11px; color: var(--text-3);">ESP-IDF {version.idf_version} · built {version.build_date}</div>
               </div>
@@ -1280,7 +1280,7 @@ export function ScreenSystem({ version, setToast }: AppState) {
         </div>
         <div class="card-body">
           <span class="field-label">Password (≥ 8 chars · empty disables auth)</span>
-          <div style="display: flex; gap: 6px;">
+          <div class="row-stack">
             <input class="input mono" type={showPwd ? 'text' : 'password'} value={pwd} placeholder="Set a password" onInput={(e) => setPwd((e.target as HTMLInputElement).value)}/>
             <button class="btn" onClick={() => setShowPwd(x => !x)}><Icon name={showPwd ? 'eyeOff' : 'eye'} size={14}/></button>
             <button class="btn btn-primary" onClick={setPassword}>{pwd ? 'Set password' : 'Disable auth'}</button>
@@ -1294,7 +1294,7 @@ export function ScreenSystem({ version, setToast }: AppState) {
       <div class="hw-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
         <div class="card">
           <div class="card-head"><span class="smallcaps">JSON config</span></div>
-          <div class="card-body" style="display: flex; gap: 8px;">
+          <div class="card-body row-stack" style="gap: 8px;">
             <button class="btn" onClick={exportConfig}><Icon name="download" size={13}/> Export</button>
             <button class="btn" onClick={() => setToast('Import: drag JSON → /api/settings (coming next)')}>
               <Icon name="upload" size={13}/> Import
@@ -1308,7 +1308,7 @@ export function ScreenSystem({ version, setToast }: AppState) {
             <div style="font-size: 12px; color: var(--text-2); margin-bottom: 10px;">
               Type <span class="mono" style="color: var(--err);">{version.hostname}</span> to confirm
             </div>
-            <div style="display: flex; gap: 6px;">
+            <div class="row-stack">
               <input class="input mono" value={confirmText} placeholder={version.hostname} onInput={(e) => setConfirmText((e.target as HTMLInputElement).value)}/>
               <button class="btn btn-danger" disabled={confirmText !== version.hostname}
                 style={`opacity: ${confirmText !== version.hostname ? 0.4 : 1};`}

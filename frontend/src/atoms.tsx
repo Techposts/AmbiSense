@@ -30,6 +30,9 @@ export const Icon = ({ name, size = 16, stroke = 1.6, style }: {
     warn: <><path d="M12 3 2 21h20L12 3zM12 10v5M12 18h.01"/></>,
     refresh: <><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></>,
     upload: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></>,
+    download: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></>,
+    eye: <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></>,
+    eyeOff: <><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><path d="M1 1l22 22"/></>,
     bolt: <><path d="M13 2L3 14h7l-1 8 10-12h-7z"/></>,
     cpu: <><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></>,
     radar: <><circle cx="12" cy="12" r="9"/><path d="M12 12L19 7"/><path d="M12 12a4 4 0 1 1-4 4"/></>,
@@ -213,7 +216,11 @@ export function LogoMark({ size = 36, distance = 0 }: { size?: number; distance?
             <stop offset="100%" stop-color="var(--acc-pink)"/>
           </radialGradient>
         </defs>
-        <rect x="1" y="1" width="46" height="46" rx="12" fill="#0a0c0f" stroke="url(#lm-grad)" stroke-width="1" opacity="0.55"/>
+        {/* Theme-aware fills: var(--bg-0) follows the page background
+         * (near-black on dark theme, near-white on light) so the logo
+         * tile + inner triangle cutout always blend with the page. The
+         * old hardcoded #0a0c0f leaked a black square onto light theme. */}
+        <rect x="1" y="1" width="46" height="46" rx="12" stroke="url(#lm-grad)" stroke-width="1" opacity="0.55" style="fill: var(--bg-0);"/>
         <g style="transform-origin: 24px 32px;">
           {[0, 1, 2].map(i => (
             <circle cx="24" cy="32" r="6" fill="none" stroke="url(#lm-grad)" stroke-width="1.2" opacity="0.7"
@@ -221,7 +228,7 @@ export function LogoMark({ size = 36, distance = 0 }: { size?: number; distance?
           ))}
         </g>
         <path d="M 24 11 L 13 32 L 35 32 Z" fill="url(#lm-grad)" opacity="0.95"/>
-        <path d="M 24 18 L 18 30 L 30 30 Z" fill="#0a0c0f"/>
+        <path d="M 24 18 L 18 30 L 30 30 Z" style="fill: var(--bg-0);"/>
         <circle cx="24" cy="32" r="2.6" fill="url(#lm-core)"/>
         <circle cx="24" cy="32" r="1.1" fill="white" opacity="0.9"/>
         {[[6,6],[42,6],[6,42],[42,42]].map(([x,y]) => (

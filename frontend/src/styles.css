@@ -122,10 +122,42 @@ input, select, textarea { font: inherit; color: inherit; }
   div[style*="grid-template-columns: repeat(auto-fit, minmax(155px, 1fr))"] {
     grid-template-columns: 1fr 1fr !important;
   }
+  /* Hardware + System screens use .hw-grid with explicit-fraction
+   * 1fr/1fr or 1.2fr/1fr columns — auto-fit selectors above don't catch
+   * them, so they stayed side-by-side on phones and squeezed Diagnostics,
+   * Factory-reset input, etc. into unusable widths. Collapse to single
+   * column on mobile. */
+  .hw-grid { grid-template-columns: 1fr !important; }
+  /* Diagnostics 2x3 grid: tighten gaps so two columns still read on
+   * 360px viewports without overflowing. */
+  .card .card-body > div[style*="grid-template-columns: 1fr 1fr"] {
+    gap: 10px 14px !important;
+  }
+  /* System tab Firmware header row: cpu icon + version + Reboot button
+   * was overflowing on narrow phones. Allow the button to wrap onto its
+   * own line; align it to the right when wrapped. */
+  .fw-head { flex-wrap: wrap; }
+  .fw-head > .btn { margin-left: auto; }
 }
 @media (max-width: 480px) {
   /* Single column on the smallest phones. */
   div[style*="grid-template-columns: repeat(auto-fit"] { grid-template-columns: 1fr !important; }
+  /* Diagnostics: 2 cols still cramped at <380px — single column reads
+   * easier and matches how the rest of the page stacks. */
+  .card .card-body > div[style*="grid-template-columns: 1fr 1fr"] {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* Utility: input + button rows that should stack on mobile.
+ * Used by Auth (password input + show + Set), Factory reset (hostname
+ * confirm + Erase), and Export/Import. On desktop they sit side-by-side;
+ * on phones the input gets full width and buttons keep their natural
+ * width below — readable on 360px viewports. */
+.row-stack { display: flex; gap: 6px; flex-wrap: nowrap; }
+@media (max-width: 760px) {
+  .row-stack { flex-wrap: wrap; }
+  .row-stack > .input { flex: 1 1 100%; min-width: 0; }
 }
 
 /* Atoms */
